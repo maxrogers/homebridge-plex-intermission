@@ -1,0 +1,86 @@
+import { randomBytes, randomUUID } from 'node:crypto';
+import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+export interface Credentials {
+  /** plex.tv account token, used for plex.tv requests. */
+  accountToken: string;
+  /** Access token for the selected server, when it differs from the account token. */
+  serverToken?: string;
+  username?: string;
+  savedAt: string;
+}
+
+/** Non-secret values that must stay stable across restarts. */
+export interface PluginState {
+  clientIdentifier: string;
+  webhookSecret: string;
+}
+
+/**
+ * Files in `<Homebridge storage>/intermission`. Credentials are written atomically with owner-only
+ * permissions and never leave this module except to make Plex requests.
+ */
+export class Storage {
+  readonly directory: string;
+
+  constructor(homebridgeStoragePath: string) {
+    this.directory = join(homebridgeStoragePath, 'intermission');
+  }
+
+  private get credentialsFile(): string {
+    return join(this.directory, 'credentials.json');
+  }
+
+  private get stateFile(): string {
+    return join(this.directory, 'state.json');
+  }
+
+  async readCredentials(): Promise<Credentials | undefined> {
+    const value = await this.readJson(this.credentialsFile);
+    if (value && typeof value.accountToken === 'string' && value.accountToken) {
+      return value as unknown as Credentials;
+    }
+    return undefined;
+  }
+
+  async writeCredentials(credentials: Credentials): Promise<void> {
+    await this.writeJson(this.credentialsFile, credentials);
+  }
+
+  async deleteCredentials(): Promise<void> {
+    await rm(this.credentialsFile, { force: true });
+  }
+
+  /** Reads the plugin state, creating it on first use. */
+  async state(): Promise<PluginState> {
+    const value = await this.readJson(this.stateFile);
+    if (value && typeof value.clientIdentifier === 'string' && typeof value.webhookSecret === 'string') {
+      return value as unknown as PluginState;
+    }
+    const state: PluginState = {
+      clientIdentifier: `homebridge-intermission-${randomUUID()}`,
+      webhookSecret: randomBytes(16).toString('hex'),
+    };
+    await this.writeJson(this.stateFile, state);
+    return state;
+  }
+
+  private async readJson(file: string): Promise<Record<string, unknown> | undefined> {
+    try {
+      const value: unknown = JSON.parse(await readFile(file, 'utf8'));
+      return value && typeof value === 'object' ? value as Record<string, unknown> : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async writeJson(file: string, value: unknown): Promise<void> {
+    await mkdir(this.directory, { recursive: true, mode: 0o700 });
+    await chmod(this.directory, 0o700);
+    const temporary = `${file}.${process.pid}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
+    await rename(temporary, file);
+    await chmod(file, 0o600);
+  }
+}

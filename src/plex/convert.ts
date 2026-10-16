@@ -66,6 +66,7 @@ export function webhookFromPayload(payload: PlexWebhookPayload): WebhookEvent | 
     user: payload.Account?.title,
     serverId: payload.Server?.uuid,
     session,
+    media: metadata?.ratingKey !== undefined ? toMedia(metadata) : undefined,
     viewOffset: toNumber(metadata?.viewOffset),
   };
 }

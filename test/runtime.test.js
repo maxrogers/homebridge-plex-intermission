@@ -54,3 +54,22 @@ test('starts with only the platform configured and shuts down cleanly', async ()
   assert.doesNotMatch(output, /unhandled|uncaught|TypeError|ReferenceError/i);
   assert.ok(shutdownMs < 12_000, `shutdown took ${shutdownMs} ms`);
 });
+
+test('starts with a full configuration before sign-in', async () => {
+  const { output, shutdownMs } = await runHomebridge([{
+    platform: 'PlexIntermission',
+    name: 'Intermission',
+    server: { id: 'server-1', name: 'Plex', url: 'http://127.0.0.1:9' },
+    sensors: [
+      { id: 'movie-playing', name: 'Movie Playing', type: 'occupancy', state: 'playing' },
+      { id: 'credits', name: 'Credits Rolling', type: 'button', events: ['credits.start'] },
+      { id: 'in-credits', name: 'In Credits', type: 'contact', state: 'credits' },
+      { id: 'active', name: 'Anything On', type: 'motion', state: 'active' },
+    ],
+    webhook: { enabled: true, port: 0 },
+    timing: { creditsOffset: 5 },
+  }]);
+  assert.match(output, /\[Intermission\] Not signed in to Plex yet/);
+  assert.doesNotMatch(output, /unhandled|uncaught|TypeError|ReferenceError|Skipping sensor/i);
+  assert.ok(shutdownMs < 12_000, `shutdown took ${shutdownMs} ms`);
+});

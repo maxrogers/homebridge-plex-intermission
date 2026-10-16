@@ -30,8 +30,11 @@ server notifications, credits markers). Run it with `PLEX_TOKEN` set; see the he
 |---|---|
 | `src/engine/` | Playback engine: turns Plex notifications and webhooks into play, pause, resume, stop, seek and credits events |
 | `src/plex/` | Plex server requests, the notification websocket, the webhook server and payload parsing |
-| `src/platform.ts` | Homebridge platform |
-| `homebridge-ui/` | The settings page |
+| `src/sensors/` | Sensor filters and conditions, and the HomeKit accessories |
+| `src/controller.ts` | Connects Plex, the engine and the sensors |
+| `src/platform.ts` | Homebridge platform: accessories, start-up and shutdown |
+| `src/config.ts`, `src/storage.ts` | Config parsing with ranges; credentials and plugin state on disk |
+| `homebridge-ui/` | The settings page: `server.js` (sign-in and discovery), `public/app.js` (the page), `public/model.js` (testable helpers) |
 | `test/` | Unit tests, replays of recorded playback (`test/fixtures/`) and a Homebridge start and stop check |
 | `tools/` | Developer tools such as the Plex timing probe |
 | `assets/` | The icon source (`icon.svg`); `icon.png` is made from it |

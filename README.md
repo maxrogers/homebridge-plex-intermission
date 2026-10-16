@@ -12,12 +12,22 @@
 
 > Not affiliated with or endorsed by Plex, Inc. "Plex" is used only to describe compatibility.
 
-> **Status: in development.** Not yet published. The design lives in [ARCHITECTURE.md](ARCHITECTURE.md).
+> **Status: in development, ready for early testing.** Not yet on npm. The design lives in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Why this exists
 
 I build things I need for myself, and sometimes I share them. This is one of those: I wanted my lights to dim when a
 movie starts and come back up when the credits roll, using nothing but Apple Home.
+
+## How it differs from other Plex plugins
+
+Other Plex plugins give you one "playing" sensor, set up by pasting a token and player ID, and updated by polling or by
+webhooks alone. Intermission:
+
+- **Triggers at the credits marker**, re-timed whenever you skip, not just on playing and stopped
+- **Uses Plex's push notifications plus webhooks:** no polling, and it still works, with fewer events, without Plex Pass
+- **Gives pause, credits and stop their own triggers**, so each can run a different scene
+- **Signs in with Plex** and lists your players, users and libraries; no tokens or IDs to copy
 
 ## Features (planned)
 

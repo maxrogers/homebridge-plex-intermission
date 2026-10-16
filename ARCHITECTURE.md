@@ -380,3 +380,13 @@ Both are MIT licensed.
 - Does a POST to `plex.tv/api/v2/user/webhooks` replace the whole list?
 - Is "Stop This Shortcut" available in Home automations that run on a home hub?
 - Which endpoints list Plex Home and shared users?
+- Does the server's `/accounts` name always match the user title in sessions and webhooks? User filters compare names.
+
+## Build status
+
+| Part | State |
+|---|---|
+| Engine, Plex client, notification stream, webhook receiver | Done, tested with recorded playback |
+| Sensors, controller, platform wiring | Done |
+| Sign-in, server choice, discovery, wizard, board, Recipes, Advanced | Done (first version: tap to edit, drag to reorder) |
+| Webhook "Add for me", Plex Pass change banners, Live tab, Diagnostics, Intermission switch | Next |

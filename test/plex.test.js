@@ -42,6 +42,7 @@ test('converts a webhook payload', () => {
     user: 'owner',
     serverId: 'server-1',
     viewOffset: 61_000,
+    media: { ratingKey: '42', title: 'Movie', type: 'movie', durationMs: 7_200_000, librarySectionId: '1', librarySectionTitle: 'Movies' },
     session: {
       playerId: 'APPLE-TV',
       playerTitle: 'Apple TV',

@@ -1,6 +1,31 @@
-import type { Marker, SessionInfo } from '../engine/types.js';
-import { markersFromMetadata, sessionFromMetadata } from './convert.js';
+import type { Marker, PlaybackState, PlayingNotification, SessionInfo } from '../engine/types.js';
+import { markersFromMetadata, sessionFromMetadata, toNumber } from './convert.js';
 import type { PlexMediaContainer, PlexMetadata } from './types.js';
+
+export interface PlexLibrary {
+  id: string;
+  title: string;
+  type: string;
+}
+
+export interface PlexServerAccount {
+  id: string;
+  name: string;
+}
+
+export interface PlexServerDevice {
+  /** Server-local device number used by play history. */
+  id: string;
+  clientIdentifier: string;
+  name: string;
+  platform?: string;
+}
+
+export interface PlexHistoryEntry {
+  deviceId: string;
+  accountId: string;
+  viewedAt: number;
+}
 
 export interface PlexServerOptions {
   /** For example `http://10.0.0.2:32400`. */
@@ -40,6 +65,62 @@ export class PlexServer {
     return match ? sessionFromMetadata(match) : undefined;
   }
 
+  /** Current playback as notifications, used to restore state on start and after reconnecting. */
+  async playing(): Promise<PlayingNotification[]> {
+    const items = await this.metadata('/status/sessions');
+    return items.flatMap((item) => {
+      const state = item.Player?.state;
+      const viewOffset = toNumber(item.viewOffset);
+      if (!item.Player?.machineIdentifier || item.sessionKey === undefined || item.ratingKey === undefined
+        || viewOffset === undefined || !state || !['playing', 'paused', 'buffering'].includes(state)) {
+        return [];
+      }
+      return [{
+        clientIdentifier: item.Player.machineIdentifier,
+        sessionKey: String(item.sessionKey),
+        ratingKey: String(item.ratingKey),
+        state: state as PlaybackState,
+        viewOffset,
+      }];
+    });
+  }
+
+  async identity(): Promise<{ machineIdentifier: string; version: string }> {
+    const body = await this.request<{ MediaContainer?: { machineIdentifier?: string; version?: string } }>('/identity');
+    return { machineIdentifier: body.MediaContainer?.machineIdentifier ?? '', version: body.MediaContainer?.version ?? '' };
+  }
+
+  async libraries(): Promise<PlexLibrary[]> {
+    const body = await this.request<{ MediaContainer?: { Directory?: Record<string, unknown>[] } }>('/library/sections');
+    return (body.MediaContainer?.Directory ?? []).map((d) => ({ id: String(d.key ?? ''), title: String(d.title ?? ''), type: String(d.type ?? '') }));
+  }
+
+  async accounts(): Promise<PlexServerAccount[]> {
+    const body = await this.request<{ MediaContainer?: { Account?: Record<string, unknown>[] } }>('/accounts');
+    return (body.MediaContainer?.Account ?? [])
+      .map((a) => ({ id: String(a.id ?? ''), name: String(a.name ?? '') }))
+      .filter((a) => a.name);
+  }
+
+  async devices(): Promise<PlexServerDevice[]> {
+    const body = await this.request<{ MediaContainer?: { Device?: Record<string, unknown>[] } }>('/devices');
+    return (body.MediaContainer?.Device ?? [])
+      .map((d) => ({
+        id: String(d.id ?? ''),
+        clientIdentifier: String(d.clientIdentifier ?? ''),
+        name: String(d.name ?? ''),
+        platform: typeof d.platform === 'string' ? d.platform : undefined,
+      }))
+      .filter((d) => d.clientIdentifier);
+  }
+
+  async history(limit = 200): Promise<PlexHistoryEntry[]> {
+    const items = await this.metadata(
+      `/status/sessions/history/all?sort=viewedAt:desc&X-Plex-Container-Start=0&X-Plex-Container-Size=${limit}`,
+    ) as Record<string, unknown>[];
+    return items.map((h) => ({ deviceId: String(h.deviceID ?? ''), accountId: String(h.accountID ?? ''), viewedAt: Number(h.viewedAt ?? 0) * 1000 }));
+  }
+
   async markers(ratingKey: string): Promise<Marker[]> {
     const items = await this.metadata(`/library/metadata/${encodeURIComponent(ratingKey)}?includeMarkers=1`);
     return markersFromMetadata(items);
@@ -51,6 +132,24 @@ export class PlexServer {
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     url.searchParams.set('X-Plex-Token', this.options.token);
     return url.toString();
+  }
+
+  /** Tries each URL and returns the first that answers as the expected server. */
+  static async findWorkingUrl(
+    urls: readonly string[],
+    options: Omit<PlexServerOptions, 'baseUrl'> & { machineIdentifier?: string },
+  ): Promise<string | undefined> {
+    for (const url of urls) {
+      try {
+        const identity = await new PlexServer({ ...options, baseUrl: url, timeoutMs: options.timeoutMs ?? 4_000 }).identity();
+        if (!options.machineIdentifier || identity.machineIdentifier === options.machineIdentifier) {
+          return url.replace(/\/+$/, '');
+        }
+      } catch {
+        // Try the next one.
+      }
+    }
+    return undefined;
   }
 
   private async metadata(path: string): Promise<PlexMetadata[]> {

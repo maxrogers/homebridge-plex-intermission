@@ -139,6 +139,10 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
     };
   }
 
+  snapshots(): PlayerSnapshot[] {
+    return [...this.players.keys()].map((id) => this.snapshot(id));
+  }
+
   /** Clears all timers. Call on shutdown. */
   dispose(): void {
     for (const player of this.players.values()) {

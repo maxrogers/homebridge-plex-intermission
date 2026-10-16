@@ -44,7 +44,10 @@ export interface WebhookEvent {
   owner: boolean;
   user?: string;
   serverId?: string;
+  /** Present when a player is involved (playback events). */
   session?: SessionInfo;
+  /** The item the event is about, also for events without a player such as `library.new`. */
+  media?: MediaInfo;
   viewOffset?: number;
 }
 
