@@ -1,0 +1,67 @@
+{
+  "name": "homebridge-plex-intermission",
+  "displayName": "Intermission for Plex",
+  "type": "module",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Turn Plex playback, pauses and credits into HomeKit sensors. Lights down when the movie starts, up when the credits roll.",
+  "author": "maxrogers",
+  "license": "MIT",
+  "homepage": "https://github.com/maxrogers/homebridge-plex-intermission#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/maxrogers/homebridge-plex-intermission.git"
+  },
+  "bugs": {
+    "url": "https://github.com/maxrogers/homebridge-plex-intermission/issues"
+  },
+  "funding": {
+    "type": "ko-fi",
+    "url": "https://ko-fi.com/maxrogers"
+  },
+  "keywords": [
+    "homebridge-plugin",
+    "supports-hap",
+    "homebridge",
+    "homekit",
+    "plex",
+    "plex webhooks",
+    "credits",
+    "movie night",
+    "home theater",
+    "lighting"
+  ],
+  "main": "dist/index.js",
+  "engines": {
+    "node": "^22.10.0 || ^24.0.0",
+    "homebridge": "^2.0.0"
+  },
+  "files": [
+    "dist",
+    "homebridge-ui",
+    "config.schema.json",
+    "icon.png",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "rimraf ./dist && tsc",
+    "lint": "eslint . --max-warnings=0",
+    "test": "npm run build && node --test test/*.test.js",
+    "prepublishOnly": "npm run lint && npm run build"
+  },
+  "dependencies": {
+    "@homebridge/plugin-ui-utils": "^2.2.6"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.10.0",
+    "eslint": "^10.9.0",
+    "globals": "^17.13.0",
+    "homebridge": "^2.4.0",
+    "rimraf": "^6.1.3",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.67.0"
+  }
+}

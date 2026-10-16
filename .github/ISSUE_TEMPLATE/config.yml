@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Plex webhooks help
+    url: https://support.plex.tv/articles/115002267687-webhooks/
+    about: Plex's own documentation for webhooks (requires Plex Pass on the server owner's account).

@@ -1,0 +1,19 @@
+{
+  "pluginAlias": "PlexIntermission",
+  "pluginType": "platform",
+  "singular": true,
+  "customUi": true,
+  "customUiPath": "./homebridge-ui",
+  "headerDisplay": "Sign-in and sensors are managed in this plugin's own page.",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "name": {
+        "title": "Platform name",
+        "type": "string",
+        "default": "Intermission",
+        "description": "Shown in the Homebridge log."
+      }
+    }
+  }
+}

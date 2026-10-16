@@ -1,0 +1,43 @@
+name: Bug report
+description: Something isn't working as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Never paste your Plex token.** The debug report from the Diagnostics tab leaves it out.
+  - type: input
+    id: version
+    attributes:
+      label: Plugin version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Homebridge, Node.js and how Homebridge runs
+      placeholder: "Homebridge 2.4.0, Node 22, Docker (host network) on Unraid"
+    validations:
+      required: true
+  - type: input
+    id: plex
+    attributes:
+      label: Plex Media Server version and the player app
+      placeholder: "1.43.4, Plex for Apple TV"
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+  - type: textarea
+    id: report
+    attributes:
+      label: Debug report or log lines
+      description: Turn on Detailed logging (Advanced), reproduce the problem, then attach the debug report from the Diagnostics tab.
+      render: text

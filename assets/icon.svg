@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+<defs>
+<linearGradient id="bg3" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2a2133"/><stop offset="1" stop-color="#141019"/></linearGradient>
+<radialGradient id="glass" cx="0.5" cy="0.42" r="0.6"><stop offset="0" stop-color="#ffe7b0" stop-opacity="0.95"/><stop offset="0.6" stop-color="#ffb648" stop-opacity="0.55"/><stop offset="1" stop-color="#e8912a" stop-opacity="0.35"/></radialGradient>
+<radialGradient id="halo3" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#ffb648" stop-opacity="0.35"/><stop offset="1" stop-color="#ffb648" stop-opacity="0"/></radialGradient>
+<linearGradient id="base3" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#d8d2de"/><stop offset="1" stop-color="#8f8899"/></linearGradient>
+</defs>
+<rect width="512" height="512" rx="112" fill="url(#bg3)"/><rect x="2" y="2" width="508" height="508" rx="110" fill="none" stroke="#ffffff" stroke-opacity="0.10" stroke-width="4"/>
+<circle cx="256" cy="226" r="190" fill="url(#halo3)"/>
+<g stroke="#ffcf7a" stroke-width="14" stroke-linecap="round" opacity="0.9"><line x1="106.0" y1="226.0" x2="70.0" y2="226.0"/><line x1="117.4" y1="168.6" x2="84.2" y2="154.8"/><line x1="149.9" y1="119.9" x2="124.5" y2="94.5"/><line x1="198.6" y1="87.4" x2="184.8" y2="54.2"/><line x1="256.0" y1="76.0" x2="256.0" y2="40.0"/><line x1="313.4" y1="87.4" x2="327.2" y2="54.2"/><line x1="362.1" y1="119.9" x2="387.5" y2="94.5"/><line x1="394.6" y1="168.6" x2="427.8" y2="154.8"/><line x1="406.0" y1="226.0" x2="442.0" y2="226.0"/></g>
+<path d="M256 110 C190 110 146 158 146 218 C146 262 170 290 192 314 C206 330 212 346 212 362 L300 362 C300 346 306 330 320 314 C342 290 366 262 366 218 C366 158 322 110 256 110 Z" fill="url(#glass)" stroke="#ffd27a" stroke-width="6"/>
+<g fill="#5a2a0c" opacity="0.85"><rect x="222" y="186" width="24" height="90" rx="9"/><rect x="266" y="186" width="24" height="90" rx="9"/></g>
+<rect x="208" y="368" width="96" height="22" rx="10" fill="url(#base3)"/>
+<rect x="214" y="394" width="84" height="20" rx="9" fill="url(#base3)"/>
+<path d="M232 418 H280 C276 434 266 440 256 440 C246 440 236 434 232 418 Z" fill="#8f8899"/>
+</svg>

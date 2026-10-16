@@ -1,0 +1,15 @@
+name: Feature request
+description: Suggest an idea
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like Intermission to do?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: How would you use it?
+      description: For example, the Home automation or room setup it would enable.
