@@ -1,0 +1,436 @@
+{
+ "description": "Apple TV, notification stream only (no webhooks): taps, holds and scrubs forward, several pauses, then stop. Recorded 2026-10-16.",
+ "player": {
+  "id": "APPLE-TV",
+  "title": "Apple TV",
+  "product": "Plex for Apple TV",
+  "platform": "tvOS"
+ },
+ "user": "owner",
+ "library": {
+  "id": "1",
+  "title": "Movies"
+ },
+ "media": {
+  "ratingKey": "1001",
+  "type": "movie",
+  "durationMs": 8700650,
+  "markers": [
+   {
+    "type": "credits",
+    "startMs": 8136585,
+    "endMs": 8700650,
+    "final": true
+   }
+  ],
+  "title": "Test Movie"
+ },
+ "events": [
+  {
+   "at": 0,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 9249,
+   "sessionKey": "7"
+  },
+  {
+   "at": 10009,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 19233,
+   "sessionKey": "7"
+  },
+  {
+   "at": 20017,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 29239,
+   "sessionKey": "7"
+  },
+  {
+   "at": 30029,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 39223,
+   "sessionKey": "7"
+  },
+  {
+   "at": 40040,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 49228,
+   "sessionKey": "7"
+  },
+  {
+   "at": 50057,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 59233,
+   "sessionKey": "7"
+  },
+  {
+   "at": 60066,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 69260,
+   "sessionKey": "7"
+  },
+  {
+   "at": 65459,
+   "source": "stream",
+   "state": "buffering",
+   "viewOffset": 85233,
+   "sessionKey": "7"
+  },
+  {
+   "at": 66093,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 85233,
+   "sessionKey": "7"
+  },
+  {
+   "at": 70112,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 87841,
+   "sessionKey": "7"
+  },
+  {
+   "at": 79866,
+   "source": "stream",
+   "state": "buffering",
+   "viewOffset": 107847,
+   "sessionKey": "7"
+  },
+  {
+   "at": 80164,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 107847,
+   "sessionKey": "7"
+  },
+  {
+   "at": 80227,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 107847,
+   "sessionKey": "7"
+  },
+  {
+   "at": 89656,
+   "source": "stream",
+   "state": "paused",
+   "viewOffset": 116311,
+   "sessionKey": "7"
+  },
+  {
+   "at": 90213,
+   "source": "stream",
+   "state": "paused",
+   "viewOffset": 116311,
+   "sessionKey": "7"
+  },
+  {
+   "at": 98668,
+   "source": "stream",
+   "state": "buffering",
+   "viewOffset": 214990,
+   "sessionKey": "7"
+  },
+  {
+   "at": 98782,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 214990,
+   "sessionKey": "7"
+  },
+  {
+   "at": 99235,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 214990,
+   "sessionKey": "7"
+  },
+  {
+   "at": 100224,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 214327,
+   "sessionKey": "7"
+  },
+  {
+   "at": 110231,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 224311,
+   "sessionKey": "7"
+  },
+  {
+   "at": 111573,
+   "source": "stream",
+   "state": "buffering",
+   "viewOffset": 236316,
+   "sessionKey": "7"
+  },
+  {
+   "at": 112233,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 236316,
+   "sessionKey": "7"
+  },
+  {
+   "at": 118160,
+   "source": "stream",
+   "state": "buffering",
+   "viewOffset": 271441,
+   "sessionKey": "7"
+  },
+  {
+   "at": 119834,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 481441,
+   "sessionKey": "7"
+  },
+  {
+   "at": 120241,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 481441,
+   "sessionKey": "7"
+  },
+  {
+   "at": 122534,
+   "source": "stream",
+   "state": "buffering",
+   "viewOffset": 514759,
+   "sessionKey": "7"
+  },
+  {
+   "at": 123411,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 574759,
+   "sessionKey": "7"
+  },
+  {
+   "at": 127374,
+   "source": "stream",
+   "state": "buffering",
+   "viewOffset": 608508,
+   "sessionKey": "7"
+  },
+  {
+   "at": 128279,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 668508,
+   "sessionKey": "7"
+  },
+  {
+   "at": 130252,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 669580,
+   "sessionKey": "7"
+  },
+  {
+   "at": 138966,
+   "source": "stream",
+   "state": "paused",
+   "viewOffset": 678583,
+   "sessionKey": "7"
+  },
+  {
+   "at": 140264,
+   "source": "stream",
+   "state": "paused",
+   "viewOffset": 678583,
+   "sessionKey": "7"
+  },
+  {
+   "at": 145205,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 1785796,
+   "sessionKey": "7"
+  },
+  {
+   "at": 145300,
+   "source": "stream",
+   "state": "buffering",
+   "viewOffset": 1785796,
+   "sessionKey": "7"
+  },
+  {
+   "at": 145418,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 1785796,
+   "sessionKey": "7"
+  },
+  {
+   "at": 150271,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 1792417,
+   "sessionKey": "7"
+  },
+  {
+   "at": 153102,
+   "source": "stream",
+   "state": "buffering",
+   "viewOffset": 1824401,
+   "sessionKey": "7"
+  },
+  {
+   "at": 153512,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 1824401,
+   "sessionKey": "7"
+  },
+  {
+   "at": 153636,
+   "source": "stream",
+   "state": "buffering",
+   "viewOffset": 1854401,
+   "sessionKey": "7"
+  },
+  {
+   "at": 154099,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 1854401,
+   "sessionKey": "7"
+  },
+  {
+   "at": 157561,
+   "source": "stream",
+   "state": "buffering",
+   "viewOffset": 1887921,
+   "sessionKey": "7"
+  },
+  {
+   "at": 158573,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 1947921,
+   "sessionKey": "7"
+  },
+  {
+   "at": 160283,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 1951180,
+   "sessionKey": "7"
+  },
+  {
+   "at": 165671,
+   "source": "stream",
+   "state": "paused",
+   "viewOffset": 1956193,
+   "sessionKey": "7"
+  },
+  {
+   "at": 169790,
+   "source": "stream",
+   "state": "buffering",
+   "viewOffset": 2203739,
+   "sessionKey": "7"
+  },
+  {
+   "at": 169886,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 2203739,
+   "sessionKey": "7"
+  },
+  {
+   "at": 170268,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 2203739,
+   "sessionKey": "7"
+  },
+  {
+   "at": 170292,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 2203739,
+   "sessionKey": "7"
+  },
+  {
+   "at": 180304,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 2216588,
+   "sessionKey": "7"
+  },
+  {
+   "at": 190312,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 2226593,
+   "sessionKey": "7"
+  },
+  {
+   "at": 200322,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 2236577,
+   "sessionKey": "7"
+  },
+  {
+   "at": 210333,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 2246583,
+   "sessionKey": "7"
+  },
+  {
+   "at": 220344,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 2256588,
+   "sessionKey": "7"
+  },
+  {
+   "at": 230353,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 2266593,
+   "sessionKey": "7"
+  },
+  {
+   "at": 240362,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 2276577,
+   "sessionKey": "7"
+  },
+  {
+   "at": 250374,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 2286583,
+   "sessionKey": "7"
+  },
+  {
+   "at": 260386,
+   "source": "stream",
+   "state": "playing",
+   "viewOffset": 2296588,
+   "sessionKey": "7"
+  },
+  {
+   "at": 260997,
+   "source": "stream",
+   "state": "stopped",
+   "viewOffset": 2296588,
+   "sessionKey": "7"
+  }
+ ]
+}
