@@ -17,7 +17,7 @@ Non-goals: direct control of Lutron, Kasa or any other lights; Homebridge v1.
 ## Requirements
 
 - Homebridge 2.x only. v1 is not supported or tested (`engines.homebridge: ^2.0.0`).
-- Node.js 22.10 or later, or 24.
+- Node.js 22.10 or later, 24 or 26.
 - Plex Media Server, signed in with the server owner's account for full functionality.
 - Plex Pass on the server owner's account for webhooks and credits detection (see [Plex Pass](#plex-pass)).
 

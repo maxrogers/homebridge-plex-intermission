@@ -34,7 +34,7 @@ movie starts and come back up when the credits roll, using nothing but Apple Hom
 ## Requirements
 
 - Homebridge 2.x (v1 is not supported)
-- Node.js 22.10 or later, or 24
+- Node.js 22.10 or later, 24 or 26
 - Plex Media Server
 - Plex Pass on the server owner's account is recommended. Without it, Intermission still works: playback start is
   detected up to 10 seconds later, credits use markers already on your server or a percentage of the runtime, and a few

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const homebridge = join(root, 'node_modules', '.bin', 'homebridge');
@@ -18,20 +19,22 @@ async function runHomebridge(platforms) {
 
   const child = spawn(homebridge, ['-U', storage, '-P', root, '--no-qrcode'], { stdio: ['ignore', 'pipe', 'pipe'] });
   let output = '';
-  child.stdout.on('data', (chunk) => { output += chunk; });
-  child.stderr.on('data', (chunk) => { output += chunk; });
+  const collect = (chunk) => { output += chunk; };
+  const log = () => stripVTControlCharacters(output);
+  child.stdout.on('data', collect);
+  child.stderr.on('data', collect);
   const exited = new Promise((done) => child.on('exit', (code, signal) => done({ code, signal })));
 
   try {
     const deadline = Date.now() + 30_000;
-    while (!/is running on port/.test(output)) {
-      assert.ok(Date.now() < deadline, `Homebridge did not start:\n${output}`);
+    while (!/is running on port/.test(log())) {
+      assert.ok(Date.now() < deadline, `Homebridge did not start:\n${log()}`);
       await new Promise((r) => setTimeout(r, 100));
     }
     const stopAt = Date.now();
     child.kill('SIGTERM');
     const result = await exited;
-    return { output, result, shutdownMs: Date.now() - stopAt };
+    return { output: log(), result, shutdownMs: Date.now() - stopAt };
   } finally {
     child.kill('SIGKILL');
     await rm(storage, { recursive: true, force: true });
