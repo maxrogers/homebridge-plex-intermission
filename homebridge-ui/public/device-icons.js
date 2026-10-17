@@ -190,3 +190,62 @@ export function deviceIconKey(d = {}) {
 export function deviceIcon(d) {
   return DEVICE_ICONS[deviceIconKey(d)].svg;
 }
+
+/** People, in the same style. */
+export const PEOPLE_ICONS = {
+  everyone: wrap(`
+    <circle cx="15" cy="17" r="5" ${BODY}/><circle cx="15" cy="17" r="5" ${S} stroke-opacity="0.55"/>
+    <path d="M5.5 37c0-5.5 4.2-9.5 9.5-9.5 2.2 0 4.1.6 5.6 1.8" ${S} stroke-opacity="0.55"/>
+    <circle cx="33" cy="17" r="5" ${BODY}/><circle cx="33" cy="17" r="5" ${S} stroke-opacity="0.55"/>
+    <path d="M42.5 37c0-5.5-4.2-9.5-9.5-9.5-2.2 0-4.1.6-5.6 1.8" ${S} stroke-opacity="0.55"/>
+    <circle cx="24" cy="20" r="6.5" ${ACC_SOFT}/><circle cx="24" cy="20" r="6.5" ${S}/>
+    <path d="M12.5 41c0-6.5 5-11.5 11.5-11.5S35.5 34.5 35.5 41" ${BODY}/><path d="M12.5 41c0-6.5 5-11.5 11.5-11.5S35.5 34.5 35.5 41" ${S}/>`),
+  person: wrap(`
+    <circle cx="24" cy="17" r="7.5" ${ACC_SOFT}/><circle cx="24" cy="17" r="7.5" ${S}/>
+    <path d="M10 41c0-7.7 6.3-13.5 14-13.5S38 33.3 38 41" ${BODY}/><path d="M10 41c0-7.7 6.3-13.5 14-13.5S38 33.3 38 41" ${S}/>`),
+};
+
+/** Library kinds from discovery: movie, show, music, photo, other. */
+export const LIBRARY_ICONS = {
+  movie: wrap(`
+    <rect x="7" y="16" width="34" height="23" rx="4" ${BODY}/><rect x="7" y="16" width="34" height="23" rx="4" ${S}/>
+    <path d="M7 16l6-8 6 8M19 16l6-8 6 8M31 16l6-8 4 5" ${S}/>
+    ${play(24, 27.5, 7)}`),
+  show: wrap(`
+    <rect x="6" y="11" width="36" height="24" rx="4" ${BODY}/><rect x="6" y="11" width="36" height="24" rx="4" ${S}/>
+    <path d="M18 41h12M24 35v6" ${S}/>
+    <rect x="12" y="17" width="10" height="12" rx="2" ${ACC_SOFT}/><rect x="26" y="17" width="10" height="12" rx="2" ${ACC_SOFT}/>
+    <path d="M13 15h0" ${GLINT}/>`),
+  music: wrap(`
+    <path d="M19 33V12l20-4v21" ${S}/>
+    <ellipse cx="14" cy="34" rx="5.5" ry="4.5" ${ACC}/><ellipse cx="14" cy="34" rx="5.5" ry="4.5" ${S}/>
+    <ellipse cx="34" cy="30" rx="5.5" ry="4.5" ${ACC}/><ellipse cx="34" cy="30" rx="5.5" ry="4.5" ${S}/>
+    <path d="M19 17l20-4" ${S} stroke-opacity="0.45"/>`),
+  photo: wrap(`
+    <rect x="6" y="10" width="36" height="28" rx="5" ${BODY}/><rect x="6" y="10" width="36" height="28" rx="5" ${S}/>
+    <circle cx="16" cy="19" r="3.5" ${ACC}/>
+    <path d="M6 33l11-10 8 7 5-4 12 9" ${S}/>`),
+  other: wrap(`
+    <rect x="6" y="13" width="26" height="22" rx="5" ${BODY}/><rect x="6" y="13" width="26" height="22" rx="5" ${S}/>
+    <path d="M32 21l10-5v16l-10-5" ${S}/>
+    <circle cx="13" cy="20" r="2" ${ACC}/>`),
+};
+
+/** HomeKit sensor types, for the sensor board. */
+export const SENSOR_ICONS = {
+  occupancy: wrap(`
+    <path d="M8 22L24 9l16 13v17a3 3 0 0 1-3 3H11a3 3 0 0 1-3-3z" ${BODY}/><path d="M8 22L24 9l16 13v17a3 3 0 0 1-3 3H11a3 3 0 0 1-3-3z" ${S}/>
+    <circle cx="24" cy="24" r="3.5" ${ACC}/><path d="M18 37c0-3.6 2.7-6 6-6s6 2.4 6 6" ${S}/>`),
+  motion: wrap(`
+    <circle cx="27" cy="9.5" r="3.5" ${ACC}/>
+    <path d="M24 16l-5 9 6 4-3 11M19 25l-7 2M25 29l7 3M24 16l7 5 5-2" ${S}/>
+    <path d="M6 16h6M4 23h6" ${S} stroke-opacity="0.45"/>`),
+  contact: wrap(`
+    <rect x="8" y="10" width="13" height="28" rx="3" ${BODY}/><rect x="8" y="10" width="13" height="28" rx="3" ${S}/>
+    <rect x="27" y="10" width="13" height="28" rx="3" ${ACC_SOFT}/><rect x="27" y="10" width="13" height="28" rx="3" ${S}/>
+    <path d="M23 20v8M25 20v8" ${S} stroke-opacity="0.45"/>`),
+  button: wrap(`
+    <circle cx="24" cy="24" r="16" ${BODY}/><circle cx="24" cy="24" r="16" ${S}/>
+    <circle cx="24" cy="24" r="8" ${ACC}/>
+    <path d="M17 14.5a11 11 0 0 1 5-2.3" ${GLINT}/>`),
+};

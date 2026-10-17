@@ -69,6 +69,11 @@ export class WebhookServer extends EventEmitter<{ payload: [unknown] }> {
 
   private handle(request: IncomingMessage, response: ServerResponse): void {
     const path = (request.url ?? '').split('?')[0];
+    if (request.method === 'GET' && path === this.path) {
+      // Lets the settings page confirm that this port belongs to Intermission.
+      response.writeHead(200, { 'Content-Type': 'application/json' }).end('{"app":"intermission"}');
+      return;
+    }
     if (request.method !== 'POST' || path !== this.path) {
       response.writeHead(404).end();
       request.resume();

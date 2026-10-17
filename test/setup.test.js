@@ -15,14 +15,13 @@ import { silentLog } from './helpers.js';
 test('config defaults', () => {
   const config = parseConfig({ platform: 'PlexIntermission' }, silentLog);
   assert.equal(config.name, 'Intermission');
-  assert.equal(config.server, undefined);
+  assert.deepEqual(config.servers, []);
   assert.deepEqual(config.sensors, []);
   assert.equal(config.webhook.port, DEFAULT_WEBHOOK_PORT);
   assert.equal(config.webhook.enabled, true);
-  assert.equal(config.engine.fallbackPercent, null);
-  assert.equal(config.fallbackConfigured, false);
+  assert.equal(config.engine.fallbackPercent, 95, 'on for everyone, movies and episodes only');
   assert.equal(config.safetyResyncMs, 5 * 60_000);
-  assert.equal(config.engine.useFirstCreditsMarker, true);
+  assert.equal(config.engine.creditsMode, 'scenes');
   assert.equal(config.engine.minItemLengthMs, 0);
 });
 
@@ -32,13 +31,16 @@ test('config clamps timing to the documented ranges', () => {
   }, silentLog);
   assert.equal(config.engine.creditsOffsetMs, 120_000);
   assert.equal(config.engine.fallbackPercent, 50);
-  assert.equal(config.fallbackConfigured, true);
   assert.equal(config.engine.rearmDistanceMs, 20_000);
   assert.equal(config.engine.pauseDebounceMs, 0);
   assert.equal(config.engine.stopHoldMs, 60_000);
   assert.equal(config.engine.minItemLengthMs, 90_000);
   assert.equal(config.safetyResyncMs, 0);
-  assert.equal(parseConfig({ timing: { fallbackPercent: null } }, silentLog).fallbackConfigured, true);
+  assert.equal(parseConfig({ timing: { fallbackPercent: null } }, silentLog).engine.fallbackPercent, null, 'null turns it off');
+  const legacy = parseConfig({ server: { id: 'a', name: 'Old', url: 'http://a' } }, silentLog);
+  assert.deepEqual(legacy.servers, [{ id: 'a', name: 'Old', url: 'http://a' }], 'single-server configs still load');
+  const many = parseConfig({ servers: [{ id: 'a', url: 'http://a' }, { id: 'a', url: 'http://b' }, { id: 'b', url: 'http://c' }, { url: 'x' }] }, silentLog);
+  assert.deepEqual(many.servers.map((s) => s.id), ['a', 'b']);
 });
 
 test('config skips invalid sensors with a warning', () => {
@@ -84,7 +86,12 @@ test('storage keeps credentials private and state stable', async (t) => {
 
 async function mockPlexTv(t, routes) {
   const requests = [];
-  const server = createServer((request, response) => {
+  const server = createServer(async (request, response) => {
+    let text = '';
+    for await (const chunk of request) {
+      text += chunk;
+    }
+    request.body = text;
     requests.push({ method: request.method, url: request.url, headers: request.headers });
     const route = routes[`${request.method} ${request.url.split('?')[0]}`];
     if (!route) {
@@ -101,6 +108,7 @@ async function mockPlexTv(t, routes) {
 }
 
 test('plex.tv sign-in, account and resources', async (t) => {
+  let webhookList = ['https://example.com/hook'];
   const { plexTv, requests } = await mockPlexTv(t, {
     'POST /api/v2/pins': () => [201, { id: 5, code: 'abcd' }],
     'GET /api/v2/pins/5': () => [200, { authToken: 'token-1' }],
@@ -118,6 +126,15 @@ test('plex.tv sign-in, account and resources', async (t) => {
         ],
       },
     ]],
+    'GET /api/home/users': () => [200, `<MediaContainer>
+      <User id="1" title="Steve" username="steve" admin="1" restricted="0"/>
+      <User id="2" title="Kids &amp; Co" username="" admin="0" restricted="1"/>
+    </MediaContainer>`, 'application/xml'],
+    'GET /api/v2/user/webhooks': () => [200, webhookList.map((url) => ({ url }))],
+    'POST /api/v2/user/webhooks': (request) => {
+      webhookList = new URLSearchParams(request.body).getAll('urls[]');
+      return [201, ''];
+    },
     'GET /devices.xml': () => [200, `<MediaContainer>
       <Device name="Living Room &amp; Co" product="Plex for Apple TV" platform="tvOS" device="Apple TV" clientIdentifier="ATV" provides="client,player" lastSeenAt="1700000000"/>
       <Device name="Server" clientIdentifier="srv" provides="server"/>
@@ -143,19 +160,27 @@ test('plex.tv sign-in, account and resources', async (t) => {
   assert.deepEqual(await plexTv.devices('token-1'), [{
     id: 'ATV', name: 'Living Room & Co', product: 'Plex for Apple TV', platform: 'tvOS', device: 'Apple TV', lastSeenAt: 1_700_000_000_000,
   }]);
+  assert.deepEqual(await plexTv.homeUsers('token-1'), [
+    { id: '1', name: 'Steve', admin: true, managed: false },
+    { id: '2', name: 'Kids & Co', admin: false, managed: true },
+  ]);
+  assert.deepEqual(await plexTv.webhooks('token-1'), ['https://example.com/hook']);
+  await plexTv.setWebhooks('token-1', ['https://example.com/hook', 'http://10.0.0.5:32550/abc']);
+  assert.deepEqual(await plexTv.webhooks('token-1'), ['https://example.com/hook', 'http://10.0.0.5:32550/abc']);
   assert.ok(requests.every((request) => request.headers['x-plex-client-identifier'] === 'client-1'));
   assert.ok(requests.every((request) => !request.url.includes('token-1')), 'tokens are sent as headers');
 });
 
-test('discovery merges sources, ranks players and survives failures', async () => {
+test('discovery merges servers, ranks players, lists Home users and groups libraries', async () => {
   const plexTv = {
     devices: async () => [
       { id: 'ATV', name: 'Living Room', platform: 'tvOS', lastSeenAt: 1_000 },
       { id: 'PHONE', name: 'iPhone', platform: 'iOS', lastSeenAt: 5_000 },
       { id: 'OLD', name: 'Old Roku', lastSeenAt: 9_000 },
     ],
+    homeUsers: async () => [{ id: '1', name: 'Steve', admin: true, managed: false }, { id: '2', name: 'Kids', admin: false, managed: true }],
   };
-  const server = {
+  const main = {
     devices: async () => [{ id: '1', clientIdentifier: 'ATV', name: 'Apple TV' }, { id: '2', clientIdentifier: 'PHONE', name: 'iPhone' }],
     history: async () => [
       { deviceId: '1', accountId: '1', viewedAt: 100 },
@@ -166,13 +191,30 @@ test('discovery merges sources, ranks players and survives failures', async () =
     accounts: async () => {
       throw new Error('offline');
     },
-    libraries: async () => [{ id: '1', title: 'Movies', type: 'movie' }, { id: '9', title: 'Other', type: 'mixed' }],
+    libraries: async () => [
+      { id: '1', title: 'Movies', type: 'movie', agent: 'tv.plex.agents.movie' },
+      { id: '2', title: 'Home Videos', type: 'movie', agent: 'tv.plex.agents.none' },
+      { id: '3', title: 'TV Shows', type: 'show' },
+      { id: '4', title: 'Music', type: 'artist' },
+      { id: '5', title: 'Photos', type: 'photo' },
+    ],
   };
-  const result = await discover(server, plexTv, 'token');
+  const second = {
+    devices: async () => [{ id: '7', clientIdentifier: 'ATV', name: 'Apple TV' }],
+    history: async () => [{ deviceId: '7', accountId: '1', viewedAt: 400 }],
+    sessions: async () => [],
+    accounts: async () => [],
+    libraries: async () => {
+      throw new Error('Plex returned HTTP 401 for /library/sections');
+    },
+  };
+  const result = await discover([{ id: 'a', name: 'Unraid', server: main }, { id: 'b', name: 'Cabin', server: second }], plexTv, 'token');
   assert.deepEqual(result.players.map((p) => p.id), ['BEDROOM', 'ATV', 'PHONE', 'OLD']);
   assert.equal(result.players[1].name, 'Living Room', 'the account name wins over the server one');
-  assert.equal(result.players[1].plays, 2);
+  assert.equal(result.players[1].plays, 3, 'plays add up across servers');
   assert.equal(result.players[0].playingNow, true);
-  assert.deepEqual(result.users, []);
-  assert.deepEqual(result.libraries.map((l) => l.id), ['1']);
+  assert.deepEqual(result.users.map((u) => u.name), ['Steve', 'Kids']);
+  assert.deepEqual(result.servers[0].libraries.map((l) => `${l.key}:${l.kind}`), ['a/1:movie', 'a/2:other', 'a/3:show', 'a/4:music', 'a/5:photo']);
+  assert.deepEqual(result.servers[1].libraries, []);
+  assert.match(result.servers[1].error, /401/);
 });

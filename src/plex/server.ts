@@ -5,7 +5,18 @@ import type { PlexMediaContainer, PlexMetadata } from './types.js';
 export interface PlexLibrary {
   id: string;
   title: string;
+  /** Plex section type: movie, show, artist or photo. */
   type: string;
+  /** Metadata agent; "Other Videos" libraries are movie sections with no agent. */
+  agent?: string;
+}
+
+/** Server preferences that affect Intermission. Missing when the token is not the owner's. */
+export interface PlexServerPrefs {
+  creditsDetection?: string;
+  webhooksEnabled?: boolean;
+  playedThreshold?: number;
+  playedAtBehaviour?: number;
 }
 
 export interface PlexServerAccount {
@@ -92,7 +103,26 @@ export class PlexServer {
 
   async libraries(): Promise<PlexLibrary[]> {
     const body = await this.request<{ MediaContainer?: { Directory?: Record<string, unknown>[] } }>('/library/sections');
-    return (body.MediaContainer?.Directory ?? []).map((d) => ({ id: String(d.key ?? ''), title: String(d.title ?? ''), type: String(d.type ?? '') }));
+    return (body.MediaContainer?.Directory ?? []).map((d) => ({
+      id: String(d.key ?? ''),
+      title: String(d.title ?? ''),
+      type: String(d.type ?? ''),
+      agent: typeof d.agent === 'string' ? d.agent : undefined,
+    }));
+  }
+
+  async prefs(): Promise<PlexServerPrefs> {
+    const body = await this.request<{ MediaContainer?: { Setting?: { id?: string; value?: unknown }[] } }>('/:/prefs');
+    const settings = new Map((body.MediaContainer?.Setting ?? []).map((s) => [s.id, s.value]));
+    const number = (key: string) => toNumber(settings.get(key));
+    const credits = settings.get('GenerateCreditsMarkerBehavior');
+    const webhooks = settings.get('WebHooksEnabled');
+    return {
+      creditsDetection: credits === undefined ? undefined : String(credits),
+      webhooksEnabled: webhooks === undefined ? undefined : webhooks === true || webhooks === 1 || webhooks === '1' || webhooks === 'true',
+      playedThreshold: number('LibraryVideoPlayedThreshold'),
+      playedAtBehaviour: number('LibraryVideoPlayedAtBehaviour'),
+    };
   }
 
   async accounts(): Promise<PlexServerAccount[]> {
@@ -157,8 +187,15 @@ export class PlexServer {
     return body.MediaContainer?.Metadata ?? [];
   }
 
-  private async request<T>(path: string): Promise<T> {
+  /** Changes one server preference. Owner token only. */
+  async setPref(name: string, value: string | number | boolean): Promise<void> {
+    const query = new URLSearchParams({ [name]: typeof value === 'boolean' ? (value ? '1' : '0') : String(value) });
+    await this.request<unknown>(`/:/prefs?${query.toString()}`, 'PUT');
+  }
+
+  private async request<T>(path: string, method = 'GET'): Promise<T> {
     const response = await fetch(`${this.baseUrl}${path}`, {
+      method,
       headers: {
         Accept: 'application/json',
         'X-Plex-Token': this.options.token,
@@ -170,6 +207,7 @@ export class PlexServer {
     if (!response.ok) {
       throw new PlexHttpError(response.status, path.split('?')[0]);
     }
-    return (await response.json()) as T;
+    const text = await response.text();
+    return (text ? JSON.parse(text) : undefined) as T;
   }
 }

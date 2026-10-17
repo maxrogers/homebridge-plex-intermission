@@ -135,11 +135,15 @@ test('items shorter than the minimum length are ignored', async () => {
 test('the credits position follows the settings', () => {
   const mid = credits(6_000_000, { final: false });
   const final = credits(6_300_000, { final: true });
-  assert.equal(creditsStart([final, mid], 7_000_000, { useFirstCreditsMarker: true, fallbackPercent: null }), 6_000_000);
-  assert.equal(creditsStart([mid, final], 7_000_000, { useFirstCreditsMarker: false, fallbackPercent: null }), 6_300_000);
-  assert.equal(creditsStart([], 7_000_000, { useFirstCreditsMarker: true, fallbackPercent: 95 }), 6_650_000);
-  assert.equal(creditsStart([], 7_000_000, { useFirstCreditsMarker: true, fallbackPercent: null }), null);
-  assert.equal(creditsStart([{ type: 'intro', startMs: 0, endMs: 60_000, final: false }], undefined, { useFirstCreditsMarker: true, fallbackPercent: 95 }), null);
+  assert.equal(creditsStart([final, mid], 7_000_000, { creditsMode: 'first', fallbackPercent: null }), 6_000_000);
+  assert.equal(creditsStart([mid, final], 7_000_000, { creditsMode: 'final', fallbackPercent: null }), 6_300_000);
+  assert.equal(creditsStart([], 7_000_000, { creditsMode: 'first', fallbackPercent: 95 }), 6_650_000);
+  assert.equal(creditsStart([], 7_000_000, { creditsMode: 'first', fallbackPercent: null }), null);
+  assert.equal(creditsStart([], 7_000_000, { creditsMode: 'first', fallbackPercent: 95 }, 'episode'), 6_650_000);
+  for (const type of ['track', 'photo', 'clip']) {
+    assert.equal(creditsStart([], 7_000_000, { creditsMode: 'first', fallbackPercent: 95 }, type), null, `no fallback for ${type}`);
+  }
+  assert.equal(creditsStart([{ type: 'intro', startMs: 0, endMs: 60_000, final: false }], undefined, { creditsMode: 'first', fallbackPercent: 95 }), null);
 });
 
 test('dispose clears pending timers', async () => {
@@ -149,4 +153,54 @@ test('dispose clears pending timers', async () => {
   engine.dispose();
   await clock.advance(200_000);
   assert.deepEqual(types(events), ['play']);
+});
+
+const sceneMarkers = [
+  { type: 'credits', startMs: 100_000, endMs: 160_000, final: false }, // first credits
+  // 60 s mid-credits scene from 160 s to 220 s
+  { type: 'credits', startMs: 220_000, endMs: 400_000, final: true },
+];
+
+test('mid-credits scenes: credits stop for the scene and start again after it', async () => {
+  const { engine, clock, events } = createEngine({ markers: sceneMarkers });
+  notify(engine, 'playing', 95_000);
+  await settle();
+  await clock.advance(200_000);
+  assert.deepEqual(events.map(([type, at]) => [type, at]), [
+    ['play', 0], ['credits.start', 5_000], ['credits.cancel', 65_000], ['credits.start', 125_000],
+  ]);
+});
+
+test('mid-credits scenes can be ignored: first or final credits only', async () => {
+  for (const [creditsMode, expected] of [['first', [['play', 0], ['credits.start', 5_000]]], ['final', [['play', 0], ['credits.start', 125_000]]]]) {
+    const { engine, clock, events } = createEngine({ markers: sceneMarkers, settings: { creditsMode } });
+    notify(engine, 'playing', 95_000);
+    await settle();
+    await clock.advance(200_000);
+    assert.deepEqual(events.map(([type, at]) => [type, at]), expected, creditsMode);
+  }
+});
+
+test('a resume rewind inside the scene does not flick back to credits', async () => {
+  const { engine, clock, events } = createEngine({ markers: sceneMarkers });
+  notify(engine, 'playing', 165_000); // in the scene
+  await settle();
+  await clock.advance(5_000);
+  notify(engine, 'paused', 170_000);
+  await clock.advance(10_000);
+  notify(engine, 'playing', 155_000); // rewinds 15 s, back into the first credits
+  await clock.advance(1_000);
+  assert.deepEqual(types(events), ['play', 'pause', 'seek', 'resume']);
+});
+
+test('a resume rewind from the final credits into the scene keeps the credits', async () => {
+  const { engine, clock, events } = createEngine({ markers: sceneMarkers });
+  notify(engine, 'playing', 225_000);
+  await settle();
+  await clock.advance(5_000);
+  notify(engine, 'paused', 230_000);
+  await clock.advance(10_000);
+  notify(engine, 'playing', 215_000);
+  await clock.advance(20_000);
+  assert.deepEqual(types(events), ['play', 'credits.start', 'pause', 'seek', 'resume']);
 });

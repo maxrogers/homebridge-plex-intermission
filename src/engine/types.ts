@@ -1,3 +1,5 @@
+import type { CreditsMode } from './credits.js';
+
 /** Player state as Plex reports it. */
 export type PlaybackState = 'playing' | 'paused' | 'buffering' | 'stopped';
 
@@ -74,8 +76,8 @@ export interface PlayerSnapshot {
 export interface EngineSettings {
   /** Delay after the credits marker before `credits.start`. Never negative. */
   creditsOffsetMs: number;
-  /** Use the first credits marker (includes mid-credits scenes); otherwise the final one. */
-  useFirstCreditsMarker: boolean;
+  /** How mid-credits scenes are handled; see CreditsMode. */
+  creditsMode: CreditsMode;
   /** Percentage of the runtime used when an item has no credits marker, or null for none. */
   fallbackPercent: number | null;
   /** How far before the credits a seek must land to leave the credits state. */
@@ -92,7 +94,7 @@ export interface EngineSettings {
 
 export const DEFAULT_ENGINE_SETTINGS: Readonly<EngineSettings> = {
   creditsOffsetMs: 0,
-  useFirstCreditsMarker: true,
+  creditsMode: 'scenes',
   fallbackPercent: null,
   rearmDistanceMs: 60_000,
   pauseDebounceMs: 2_000,

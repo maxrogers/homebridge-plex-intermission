@@ -39,7 +39,8 @@ export class SensorAccessory {
       const press = Characteristic.ProgrammableSwitchEvent;
       this.service.getCharacteristic(press).setProps({ validValues: [press.SINGLE_PRESS] });
     } else {
-      this.setActive(false, true);
+      // Start from the state saved before Homebridge restarted, so automations don't fire on restart.
+      this.setActive(accessory.context.active === true, true);
     }
   }
 
@@ -52,6 +53,7 @@ export class SensorAccessory {
       return;
     }
     this.active = active;
+    this.accessory.context.active = active;
     const { Characteristic } = this.api.hap;
     switch (this.config.type) {
       case 'occupancy':

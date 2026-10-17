@@ -46,6 +46,16 @@ export interface PlexDevice {
   lastSeenAt?: number;
 }
 
+/** A member of the account's Plex Home. */
+export interface PlexHomeUser {
+  id: string;
+  /** The name Plex shows in sessions and webhooks. */
+  name: string;
+  admin: boolean;
+  /** A managed user (no plex.tv account of its own). */
+  managed: boolean;
+}
+
 const PRODUCT = 'Intermission for Plex';
 
 /** plex.tv requests: sign-in, account, servers and devices. */
@@ -130,7 +140,44 @@ export class PlexTv {
       .filter((device) => device.id);
   }
 
-  private async request<T>(path: string, init: { method?: string; token?: string; text?: boolean } = {}): Promise<T> {
+  /** Members of the account's Plex Home, including the owner. Empty when the account has no Home. */
+  async homeUsers(token: string): Promise<PlexHomeUser[]> {
+    const xml = await this.request<string>('/api/home/users', { token, text: true });
+    return [...xml.matchAll(/<User\s[^>]*>/g)].map((match) => {
+      const tag = match[0];
+      const get = (name: string) => decodeXml((new RegExp(`\\s${name}="([^"]*)"`).exec(tag) ?? [])[1] ?? '');
+      return {
+        id: get('id'),
+        name: get('title') || get('username'),
+        admin: get('admin') === '1',
+        managed: get('restricted') === '1',
+      };
+    }).filter((user) => user.id && user.name);
+  }
+
+  /** The account's webhook URLs (Plex Pass). This plex.tv endpoint is not publicly documented. */
+  async webhooks(token: string): Promise<string[]> {
+    const body = await this.request<unknown>('/api/v2/user/webhooks', { token });
+    const items = Array.isArray(body) ? body : [];
+    return items.flatMap((item: unknown) => {
+      const url = typeof item === 'string' ? item : (item as { url?: unknown })?.url;
+      return typeof url === 'string' && url ? [url] : [];
+    });
+  }
+
+  /** Replaces the account's webhook list. Callers pass the full list, including existing entries. */
+  async setWebhooks(token: string, urls: readonly string[]): Promise<void> {
+    const body = new URLSearchParams();
+    for (const url of urls) {
+      body.append('urls[]', url);
+    }
+    await this.request<unknown>('/api/v2/user/webhooks', { method: 'POST', token, body, empty: true });
+  }
+
+  private async request<T>(
+    path: string,
+    init: { method?: string; token?: string; text?: boolean; body?: URLSearchParams; empty?: boolean } = {},
+  ): Promise<T> {
     const headers: Record<string, string> = {
       Accept: init.text ? 'application/xml' : 'application/json',
       'X-Plex-Client-Identifier': this.options.clientIdentifier,
@@ -139,13 +186,21 @@ export class PlexTv {
     if (init.token) {
       headers['X-Plex-Token'] = init.token;
     }
+    if (init.body) {
+      headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    }
     const response = await fetch(`${this.baseUrl}${path}`, {
       method: init.method ?? 'GET',
       headers,
+      body: init.body?.toString(),
       signal: AbortSignal.timeout(this.options.timeoutMs ?? 10_000),
     });
     if (!response.ok) {
       throw new PlexHttpError(response.status, `plex.tv${path.split('?')[0]}`);
+    }
+    if (init.empty) {
+      await response.arrayBuffer();
+      return undefined as T;
     }
     return (init.text ? await response.text() : await response.json()) as T;
   }

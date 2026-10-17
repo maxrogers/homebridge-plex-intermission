@@ -59,9 +59,9 @@ test('starts with a full configuration before sign-in', async () => {
   const { output, shutdownMs } = await runHomebridge([{
     platform: 'PlexIntermission',
     name: 'Intermission',
-    server: { id: 'server-1', name: 'Plex', url: 'http://127.0.0.1:9' },
+    servers: [{ id: 'server-1', name: 'Plex', url: 'http://127.0.0.1:9' }, { id: 'server-2', name: 'Cabin', url: 'http://127.0.0.1:10' }],
     sensors: [
-      { id: 'movie-playing', name: 'Movie Playing', type: 'occupancy', state: 'playing' },
+      { id: 'media-playing', name: 'Media Playing', type: 'occupancy', state: 'playing', filters: { libraries: ['server-1/1'] } },
       { id: 'credits', name: 'Credits Rolling', type: 'button', events: ['credits.start'] },
       { id: 'in-credits', name: 'In Credits', type: 'contact', state: 'credits' },
       { id: 'active', name: 'Anything On', type: 'motion', state: 'active' },

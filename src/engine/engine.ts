@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 
 import type { Clock, TimerHandle } from './clock.js';
-import { creditsStart } from './credits.js';
+import { creditsRanges, type CreditsRange } from './credits.js';
 import type {
   EngineEvent,
   EngineEventType,
@@ -39,8 +39,10 @@ interface PlayerRecord {
   observedAt: number;
   /** False until Plex has reported a position for the current item. */
   positionKnown: boolean;
-  /** Position where the credits begin: null when there are none, undefined until markers are known. */
-  creditsAtMs: number | null | undefined;
+  /** Where the credits are: empty when there are none, undefined until markers are known. */
+  credits: CreditsRange[] | undefined;
+  /** True when the latest position report was a jump backwards. */
+  jumpedBack: boolean;
   inCredits: boolean;
   creditsTimer?: TimerHandle;
   pauseTimer?: TimerHandle;
@@ -165,7 +167,8 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
         positionMs: 0,
         observedAt: this.deps.clock.now(),
         positionKnown: false,
-        creditsAtMs: undefined,
+        credits: undefined,
+        jumpedBack: false,
         inCredits: false,
       };
       this.players.set(id, player);
@@ -193,7 +196,8 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
     player.ready = false;
     player.ignored = false;
     player.positionKnown = false;
-    player.creditsAtMs = undefined;
+    player.credits = undefined;
+    player.jumpedBack = false;
     player.inCredits = false;
   }
 
@@ -247,8 +251,10 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
     if (generation !== player.generation) {
       return;
     }
-    player.creditsAtMs = creditsStart(markers, player.session?.media.durationMs, this.settings);
-    this.deps.log.debug('%s: credits at %s', label(player), player.creditsAtMs === null ? 'none' : formatTime(player.creditsAtMs));
+    player.credits = creditsRanges(markers, player.session?.media.durationMs, this.settings, player.session?.media.type);
+    this.deps.log.debug('%s: credits %s', label(player), player.credits.length === 0
+      ? 'none'
+      : player.credits.map((r) => `${formatTime(r.startMs)}-${r.endMs === Infinity ? 'end' : formatTime(r.endMs)}`).join(', '));
     this.scheduleCredits(player);
   }
 
@@ -261,7 +267,9 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
     player.observedAt = now;
     player.positionKnown = true;
     const tracked = wasKnown && !fresh && player.ready && !player.ignored && player.activity !== 'idle';
-    if (tracked && Math.abs(positionMs - expected) > this.settings.seekThresholdMs) {
+    const jumped = tracked && Math.abs(positionMs - expected) > this.settings.seekThresholdMs;
+    player.jumpedBack = jumped && positionMs < expected;
+    if (jumped) {
       this.emitEvent(player, 'seek');
     }
   }
@@ -342,36 +350,53 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
    * Arms the credits timer from the current position. Called on every new position and state,
    * so seeks and skips move the timer the moment Plex reports them.
    */
+  /**
+   * Keeps `inCredits` in step with the position and sets a timer for the next credits boundary.
+   * Small rewinds (Plex rewinds a little on resume) never change the credits state: a rewind that
+   * lands within the re-arm distance of the credits it left keeps it.
+   */
   private scheduleCredits(player: PlayerRecord): void {
     this.clearCreditsTimer(player);
-    const creditsAt = player.creditsAtMs;
-    if (!player.ready || player.ignored || !player.positionKnown || creditsAt === null || creditsAt === undefined) {
+    const ranges = player.credits;
+    if (!player.ready || player.ignored || !player.positionKnown || !ranges || ranges.length === 0) {
       return;
     }
-    const now = this.deps.clock.now();
-    const position = this.position(player, now);
+    const position = this.position(player);
+    const offset = this.settings.creditsOffsetMs;
+    const rearm = this.settings.rearmDistanceMs;
+    const startOf = (range: CreditsRange) => range.startMs + offset;
+    const inside = ranges.find((range) => position >= startOf(range) - TIMER_TOLERANCE_MS && position < range.endMs);
+    const next = ranges.find((range) => startOf(range) > position);
 
-    if (player.inCredits) {
-      if (position >= creditsAt - this.settings.rearmDistanceMs) {
-        return;
+    if (player.inCredits && !inside) {
+      const latched = position < startOf(ranges[0]!)
+        ? position >= ranges[0]!.startMs - rearm
+        : player.jumpedBack && next !== undefined && startOf(next) - position <= rearm;
+      if (!latched) {
+        player.inCredits = false;
+        this.emitEvent(player, 'credits.cancel');
       }
-      player.inCredits = false;
-      this.emitEvent(player, 'credits.cancel');
+    } else if (!player.inCredits && inside && ACTIVE.has(player.raw)) {
+      // A small rewind from a mid-credits scene back into the end of the credits keeps the scene state.
+      const backIntoEnd = player.jumpedBack && inside.endMs !== Infinity && inside.endMs - position <= rearm;
+      if (!backIntoEnd) {
+        player.inCredits = true;
+        this.emitEvent(player, 'credits.start');
+      }
     }
-    if (!ACTIVE.has(player.raw)) {
+
+    if (player.raw !== 'playing') {
       return;
     }
-    const wait = creditsAt + this.settings.creditsOffsetMs - position;
-    if (wait <= TIMER_TOLERANCE_MS) {
-      player.inCredits = true;
-      this.emitEvent(player, 'credits.start');
-      return;
-    }
-    if (player.raw === 'playing') {
+    const boundary = player.inCredits
+      ? (inside && inside.endMs !== Infinity ? inside.endMs : (inside ? undefined : next && startOf(next)))
+      : (inside ? inside.endMs : next && startOf(next));
+    if (boundary !== undefined && Number.isFinite(boundary)) {
       player.creditsTimer = this.deps.clock.setTimeout(() => {
         player.creditsTimer = undefined;
+        player.jumpedBack = false;
         this.scheduleCredits(player);
-      }, wait);
+      }, Math.max(0, boundary - position));
     }
   }
 

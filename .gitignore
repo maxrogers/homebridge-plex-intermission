@@ -4,3 +4,6 @@ dist
 *.tgz
 intermission-probe-*.jsonl
 .DS_Store
+tools/reliability-lab/node_modules/
+tools/reliability-lab/results-*.json
+tools/reliability-lab/homebridge-*.log

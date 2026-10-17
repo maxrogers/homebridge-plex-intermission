@@ -106,7 +106,7 @@ any -> stopping --(stop hold elapsed)--> idle   (new playback during the hold ca
 5. **Latch:** once in credits, the state stays in credits unless position moves back more than the re-arm distance
    (default 60 s) before the marker. This prevents a fade-up, fade-down, fade-up flicker when resume rewinds
    the position a few seconds before the credits.
-6. If the item has no credits marker and the fallback is enabled, a percentage of duration is used instead.
+6. If a movie or episode has no credits marker, 95% of its duration is used instead (adjustable or off). Music, photos and clips never get one.
 
 Markers are cached per item. A "no marker" result is re-checked after 6 hours, on `library.new`, or on the next play,
 so markers generated later are picked up without a restart.
@@ -146,23 +146,62 @@ Every sensor has optional filters. Within a filter group the values are OR; acro
 | Media types | Movie, Episode, Clip, Track |
 | Conditions | Has credits marker, Local or remote player |
 
-### Suggested setup: Movie Night
+### Suggested setups
 
-| Sensor | Type | Behaviour |
+All three use state sensors only (see the lab results below).
+
+| Option | Sensors | Behaviour |
 |---|---|---|
-| Movie Playing | Occupancy | On while playing and before credits. Used for "lights down" and as the cancel check in ramps |
-| Movie Paused | Button | Pressed after the pause debounce |
-| Credits Rolling | Button | Pressed at the credits marker |
-| Movie Stopped | Button | Pressed after the stop hold |
-| Movie Started | Button | Pressed on play and resume |
+| 1. Simple | Media Playing (playing, including credits) | On while anything plays; off on pause and stop |
+| 2. Credits-Aware (recommended) | Media Playing (playing, before credits) | Also off during the credits, on again for a mid-credits scene |
+| 3. Every State | Media Playing, Media Paused, Credits Rolling, Nothing Playing | Exactly one on at a time; each state gets its own automation |
 
-Filters: the chosen players, with the Movies and TV libraries preselected.
+Mid-credits scenes come from Plex's credits markers: a movie with a scene has two credits markers with a gap between
+them. By default credits follow every marker, so the gap counts as playing. Advanced can instead run the credits from
+the first marker or from the final one. Rewinds within the re-arm distance never change the credits state, so the
+15-second rewind on resume does not flick the lights at a boundary.
+
+Filters: the chosen players and people, with every Movies and TV library preselected on each server.
+
+People: **All Plex Home users** (the default, no user filter) or specific users from `plex.tv/api/home/users`.
+Libraries are listed per server and stored as `serverId/sectionId`. Music, Photos and Other Videos can be chosen; they
+never get a credits event, so their sensors simply follow play, pause and stop.
+
+### Sensors and buttons: lab results
+
+`tools/reliability-lab` runs the plugin in a real Homebridge against a simulated Plex server, with a real HAP
+controller as the hub and modelled Home automations driving virtual lights. Scripted run, 20 checks after each
+situation settled:
+
+| Rig | Right | Fails |
+|---|---|---|
+| A. Buttons only | 14/20 | hub offline at a pause; rewind out of the credits (no event to bring lights down); playback resumed while Homebridge restarted; credits fade kept running into the next episode (a shortcut can't stop another) |
+| B. Sensors only | 20/20 | none |
+| B2. Sensors, hub ignores changes seen on reconnect | 15/20 | the hub-offline and restart cases, until the next change |
+| C. One sensor and three buttons | 18/20 | missed pause and missed credits while the hub was offline |
+
+A randomised run (40 rounds of pauses, skips, credits jumps, rewinds, autoplay and hub outages) scored 38/40 for
+buttons and 39/40 for every sensor rig; the one miss shared by all was a check during a fade.
+
+Stutter was the same for every rig: quick pause/resume bursts and skips produced no light changes at all, because the
+engine's debounce and credits latch absorb them before HomeKit sees anything. HAP-NodeJS also delivers every distinct
+sensor value (it coalesces only identical repeats within 250 ms), so sensors do not filter stutter by themselves.
+
+Plugin changes from the lab: sensors restore their last state after a restart until Plex has been read; state changes
+are published before button presses, offs before ons.
+
+### Sensors and buttons in HomeKit
+
+- **State sensors** have a value Home can read: an automation can trigger on a change *and* use the state as a condition,
+  and a shortcut can read it (the ramp's cancel check). Occupancy, Motion and Contact behave the same here; they differ in
+  how Home presents them (Motion can send notifications; Contact reads as open/closed).
+- **Buttons** are momentary: Home can trigger on a press but cannot test one later. Each button can run its own scene.
 
 ## Fades in Apple Home
 
 HomeKit has no transition-time setting, and native fade rates differ by brand and cannot vary per event.
 Per-event fades are built in Home as automations converted to shortcuts: Repeat N times, set brightness up a step,
-Wait. The ramp checks **Movie Playing** each step and stops if playback resumed. The Recipes tab gives step-by-step
+Wait. The ramp checks **Credits Rolling** each step and stops once it is no longer detected. The Recipes tab gives step-by-step
 recipes. The plugin cannot create Home automations; only Apple Home can.
 
 ## Settings
@@ -172,8 +211,8 @@ The Advanced page has **Reset to defaults** and the note "These rarely need chan
 | Setting | Default | Range |
 |---|---|---|
 | Credits offset | 0 s | 0 to 120 s (never before the marker) |
-| Start at first credits marker (includes mid-credits scenes) | On | Off waits for the final marker |
-| Fallback when an item has no credits marker | Off | 50 to 99% of duration |
+| Mid-credits scenes | Dim for the scene | Or lights up from the first credits, or down until the final credits |
+| Fallback when a movie or episode has no credits marker | 95% (with or without Plex Pass) | Off, or 50 to 99% of duration |
 | Pre-fire verify lead (only when the notification stream is down) | 20 s | 12 to 120 s |
 | Safety re-sync while playing (only when the notification stream is down) | 5 min | Off, 1 to 30 min |
 | Credits re-arm distance | 60 s | 20 to 600 s |
@@ -217,7 +256,7 @@ event while Plex Pass is unavailable stays in HomeKit and simply does not trigge
 | Pause, resume, stop, buffering, seeks | Instant | Instant (notification stream) |
 | Playback start | Instant (`media.play` webhook) | At the player's first report, up to 10 s after pressing play (measured) |
 | Player, user and library of a session | From the webhook, instantly | One session read when the session starts |
-| Credits trigger | Credits markers | Markers already on the server; otherwise the percentage fallback (on by default without Plex Pass, 95%) |
+| Credits trigger | Credits markers, then the percentage fallback | Markers already on the server, then the percentage fallback |
 | New credits markers for new media | Generated by the server | Not generated |
 | `media.scrobble`, `media.rate`, `library.new`, `library.on.deck`, owner events | Available | Not available |
 
@@ -286,7 +325,21 @@ Uses the undocumented `plex.tv/api/v2/user/webhooks` endpoint that Plex Web uses
    offered for replacement. No other entry is removed unless the user explicitly selects it.
 3. The fallback is copying the URL, with instructions for adding it in Plex.
 
-Until it is confirmed whether a POST replaces the whole list, the plugin always sends the full list.
+Until it is confirmed whether a POST replaces the whole list, the plugin always sends the full list. After the change it re-reads
+the list; if any existing webhook went missing, it writes the full list again. Setup shows this as its own step after
+choosing servers, with a red minus beside each existing webhook so old ones can be removed in the same change.
+
+The address ends in a random key made per install. The receiver ignores any request without it and answers a GET on
+that path with `{"app":"intermission"}`, so the settings page can tell whether the port is free, used by Intermission,
+or taken by another app (in which case it asks for another port).
+
+### Sign-in lifetime
+
+Homebridge keeps a plugin's storage folder when the plugin is removed. The credentials therefore carry a `setupId` that
+is also written to the plugin's config at sign-in. A config without the matching id (a fresh install) means the saved
+sign-in is left over: the settings page erases it and the platform ignores it. When a server's Webhooks setting
+(`WebHooksEnabled`) is off, the same approval also turns it on. The address is this machine's IPv4 address on the
+server's subnet, or the "Homebridge address for Plex" override in Advanced.
 
 **Endpoint security:**
 - A random 128-bit secret path. Requests to any other path are rejected.
@@ -311,7 +364,7 @@ Until it is confirmed whether a POST replaces the whole list, the plugin always 
   2. Server, chosen automatically when there is only one.
   3. Health check: Plex Pass, webhook with "Add for me", credits detection with coverage per library.
   4. Choose players, users and libraries.
-  5. The Movie Night suggestion or "Start from scratch."
+  5. A suggested setup (Simple, Credits-Aware or Every State) or "Start from scratch."
   6. The board.
 - **Tabs:** Sensors (the board), Live, Recipes & Notes, Advanced, Diagnostics.
 - **Header:** account and server, a webhook status dot with the time of the last event, and Refresh.
@@ -388,5 +441,6 @@ Both are MIT licensed.
 |---|---|
 | Engine, Plex client, notification stream, webhook receiver | Done, tested with recorded playback |
 | Sensors, controller, platform wiring | Done |
-| Sign-in, server choice, discovery, wizard, board, Recipes, Advanced | Done (first version: tap to edit, drag to reorder) |
-| Webhook "Add for me", Plex Pass change banners, Live tab, Diagnostics, Intermission switch | Next |
+| Sign-in, several servers, discovery, wizard, board, Recipes, Advanced | Done (tap to edit, drag to reorder) |
+| Webhook "Add for me" with review, "About this setup" report | Done |
+| Plex Pass change banners, Live tab, debug log export, Intermission switch | Next |

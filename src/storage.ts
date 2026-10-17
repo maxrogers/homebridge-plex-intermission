@@ -5,10 +5,17 @@ import { join } from 'node:path';
 export interface Credentials {
   /** plex.tv account token, used for plex.tv requests. */
   accountToken: string;
-  /** Access token for the selected server, when it differs from the account token. */
+  /** Access tokens per server, when they differ from the account token. */
+  serverTokens?: Record<string, string>;
+  /** Older single-server token. */
   serverToken?: string;
   username?: string;
   savedAt: string;
+  /**
+   * Matches `setupId` in the plugin's config. Homebridge keeps a plugin's storage folder when the
+   * plugin is removed, so credentials without a matching config are left over and are ignored.
+   */
+  setupId?: string;
 }
 
 /** Non-secret values that must stay stable across restarts. */
@@ -21,6 +28,11 @@ export interface PluginState {
  * Files in `<Homebridge storage>/intermission`. Credentials are written atomically with owner-only
  * permissions and never leave this module except to make Plex requests.
  */
+/** The token to use for a server. */
+export function serverToken(credentials: Credentials, serverId: string): string {
+  return credentials.serverTokens?.[serverId] ?? credentials.serverToken ?? credentials.accountToken;
+}
+
 export class Storage {
   readonly directory: string;
 

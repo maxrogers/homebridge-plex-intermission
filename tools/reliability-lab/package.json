@@ -1,0 +1,14 @@
+{
+  "name": "intermission-reliability-lab",
+  "private": true,
+  "type": "module",
+  "description": "Runs Intermission in a real Homebridge against a simulated Plex server, with a HAP controller as the home hub, and compares light automations built on buttons and on sensors.",
+  "scripts": {
+    "lab": "node lab.mjs",
+    "fuzz": "node fuzz.mjs"
+  },
+  "dependencies": {
+    "hap-controller": "0.10.2",
+    "ws": "8.18.0"
+  }
+}

@@ -99,7 +99,10 @@ test('webhook server accepts only POSTs to its secret path', async () => {
   try {
     assert.equal((await post('/s3cret', multipart(payload))).status, 200);
     assert.equal((await post('/wrong', multipart(payload))).status, 404);
-    assert.equal((await fetch(`http://127.0.0.1:${port}/s3cret`)).status, 404);
+    const probe = await fetch(`http://127.0.0.1:${port}/s3cret`);
+    assert.equal(probe.status, 200, 'a GET on the secret path identifies Intermission');
+    assert.deepEqual(await probe.json(), { app: 'intermission' });
+    assert.equal((await fetch(`http://127.0.0.1:${port}/wrong`)).status, 404);
     assert.equal((await post('/s3cret', Buffer.alloc(10_000, 'a'), 'text/plain').catch(() => ({ status: 413 }))).status, 413);
     assert.deepEqual(received, [payload]);
   } finally {

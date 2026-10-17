@@ -16,6 +16,8 @@ test('empty filters allow everything; set filters need a matching value', () => 
   assert.equal(matchesFilters({ ...none, players: ['A'] }, { media }), false, 'no player fails a player filter');
   assert.equal(matchesFilters({ ...none, libraries: ['1'], mediaTypes: ['movie'] }, { media }), true);
   assert.equal(matchesFilters({ ...none, mediaTypes: ['episode'] }, { media }), false);
+  assert.equal(matchesFilters({ ...none, libraries: ['srv-a/1'] }, { serverId: 'srv-a', media }), true, 'server-qualified library');
+  assert.equal(matchesFilters({ ...none, libraries: ['srv-b/1'] }, { serverId: 'srv-a', media }), false, 'same section on another server');
 });
 
 test('state conditions', () => {
@@ -32,6 +34,7 @@ test('state conditions', () => {
 
 function accessory(config, existing) {
   const target = existing ?? new hap.Accessory(config.name, hap.uuid.generate(config.id));
+  target.context ??= {}; // PlatformAccessory has a persisted context; a bare HAP accessory does not.
   return new SensorAccessory({ hap }, target, { filters: none, events: [], ...config });
 }
 
@@ -66,4 +69,11 @@ test('changing a sensor type swaps the service on the same accessory', () => {
   assert.equal(second.accessory.getService(hap.Service.OccupancySensor), undefined);
   assert.ok(second.accessory.getService(hap.Service.StatelessProgrammableSwitch));
   assert.ok(second.accessory.getService(hap.Service.AccessoryInformation));
+});
+
+test('a sensor starts in the state it had before Homebridge restarted', () => {
+  const first = accessory({ id: 'f', name: 'Playing', type: 'occupancy' });
+  first.setActive(true);
+  const again = accessory({ id: 'f', name: 'Playing', type: 'occupancy' }, first.accessory);
+  assert.equal(again.accessory.getService(hap.Service.OccupancySensor).getCharacteristic(hap.Characteristic.OccupancyDetected).value, 1);
 });

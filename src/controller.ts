@@ -1,6 +1,6 @@
 import type { EventEmitter } from 'node:events';
 
-import { WEBHOOK_EVENTS, type IntermissionConfig, type SensorConfig, type TriggerEvent } from './config.js';
+import { WEBHOOK_EVENTS, type IntermissionConfig, type SensorConfig, type ServerConfig, type TriggerEvent } from './config.js';
 import type { Clock, TimerHandle } from './engine/clock.js';
 import { PlaybackEngine } from './engine/engine.js';
 import type { EngineEvent, Logger, Marker, PlayingNotification, SessionInfo, WebhookEvent } from './engine/types.js';
@@ -26,10 +26,8 @@ export interface StreamApi extends EventEmitter<{
   stop(): void;
 }
 
-export interface WebhookApi extends EventEmitter<{ payload: [unknown] }> {
-  start(): Promise<void>;
-  stop(): Promise<void>;
-}
+/** Webhook payloads. The platform owns the receiver, shared by every server's controller. */
+export type WebhookApi = EventEmitter<{ payload: [unknown] }>;
 
 /** A HomeKit output. */
 export interface SensorOutput {
@@ -40,9 +38,11 @@ export interface SensorOutput {
 
 export interface ControllerOptions {
   config: IntermissionConfig;
+  /** The server this controller watches. */
+  server: ServerConfig;
   log: Logger;
   clock: Clock;
-  server: ServerApi;
+  plex: ServerApi;
   stream: StreamApi;
   webhooks?: WebhookApi;
   getMarkers(ratingKey: string): Promise<readonly Marker[]>;
@@ -53,6 +53,9 @@ export interface ControllerOptions {
 
 const WEBHOOK_ONLY = new Set<string>(WEBHOOK_EVENTS);
 
+/** How long sensors keep their state from before a restart when Plex cannot be read. */
+const STARTUP_GRACE_MS = 20_000;
+
 /**
  * Connects Plex to the sensors: notifications and webhooks go into the playback engine, engine
  * events press buttons, and every change re-evaluates the state sensors.
@@ -60,6 +63,12 @@ const WEBHOOK_ONLY = new Set<string>(WEBHOOK_EVENTS);
 export class Controller {
   readonly engine: PlaybackEngine;
   private resyncTimer?: TimerHandle;
+  /**
+   * False until the first sync with Plex. Until then the sensors keep the state they had before
+   * Homebridge restarted, so a hub reconnecting early never sees "Nothing Playing" mid-movie.
+   */
+  private ready = false;
+  private readyTimer?: TimerHandle;
   private resyncing = false;
   private unauthorized = false;
   private stopped = true;
@@ -68,20 +77,20 @@ export class Controller {
     this.engine = new PlaybackEngine({
       clock: options.clock,
       log: options.log,
-      resolveSession: (playerId, sessionKey) => this.call(() => options.server.session(playerId, sessionKey), undefined),
+      resolveSession: (playerId, sessionKey) => this.call(() => options.plex.session(playerId, sessionKey), undefined),
       getMarkers: (ratingKey) => this.call(() => options.getMarkers(ratingKey), []),
     }, options.config.engine);
 
     this.engine.on('event', (event) => this.onEngineEvent(event));
     options.stream.on('playing', (notification) => this.engine.handleNotification(notification));
     options.stream.on('connected', () => {
-      options.log.info('Connected to Plex.');
+      options.log.info('Connected to %s.', options.server.name);
       this.cancelResync();
       void this.resync();
     });
     options.stream.on('disconnected', () => {
       if (!this.stopped) {
-        options.log.warn('Lost the connection to Plex. Reconnecting.');
+        options.log.warn('Lost the connection to %s. Reconnecting.', options.server.name);
         this.scheduleResync();
       }
     });
@@ -90,26 +99,31 @@ export class Controller {
 
   async start(): Promise<void> {
     this.stopped = false;
-    this.refreshStates();
+    this.ready = false;
+    this.readyTimer = this.options.clock.setTimeout(() => this.becomeReady(), STARTUP_GRACE_MS);
     this.options.stream.start();
-    if (this.options.webhooks) {
-      try {
-        await this.options.webhooks.start();
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        this.options.log.error(code === 'EADDRINUSE'
-          ? 'Cannot receive Plex webhooks: port %d is in use. Choose another port in the plugin settings.'
-          : 'Cannot receive Plex webhooks on port %d: %s', this.options.config.webhook.port, (error as Error).message);
-      }
+  }
+
+  private becomeReady(): void {
+    if (this.readyTimer) {
+      this.options.clock.clearTimeout(this.readyTimer);
+      this.readyTimer = undefined;
+    }
+    if (!this.ready && !this.stopped) {
+      this.ready = true;
+      this.refreshStates();
     }
   }
 
   async stop(): Promise<void> {
     this.stopped = true;
+    if (this.readyTimer) {
+      this.options.clock.clearTimeout(this.readyTimer);
+      this.readyTimer = undefined;
+    }
     this.cancelResync();
     this.options.stream.stop();
     this.engine.dispose();
-    await this.options.webhooks?.stop();
   }
 
   /**
@@ -122,7 +136,7 @@ export class Controller {
     }
     this.resyncing = true;
     try {
-      const playing = await this.options.server.playing();
+      const playing = await this.options.plex.playing();
       const live = new Set(playing.map((entry) => entry.clientIdentifier));
       for (const snapshot of this.engine.snapshots()) {
         const ratingKey = snapshot.session?.media.ratingKey;
@@ -139,6 +153,10 @@ export class Controller {
       for (const entry of playing) {
         this.engine.handleNotification(entry);
       }
+      if (playing.length === 0) {
+        // Nothing plays: the state is known now. Otherwise the first playback event makes it known.
+        this.becomeReady();
+      }
     } catch (error) {
       this.report(error, 'Cannot read playback from Plex');
     } finally {
@@ -153,8 +171,14 @@ export class Controller {
     const { log } = this.options;
     log.debug('%s: %s on %s at %ds', event.type, event.session.media.title,
       event.session.playerTitle ?? event.playerId, Math.round(event.positionMs / 1000));
-    this.pressButtons(event.type, contextOf(event.session));
-    this.refreshStates();
+    // States first: a button press is delivered to the hub at once and flushes queued state changes
+    // with it, so a shortcut started by the press already sees the new states.
+    if (this.ready) {
+      this.refreshStates();
+    } else {
+      this.becomeReady();
+    }
+    this.pressButtons(event.type, contextOf(event.session, undefined, this.options.server.id));
     if (!this.options.stream.isConnected) {
       this.scheduleResync();
     }
@@ -165,8 +189,7 @@ export class Controller {
     if (!webhook) {
       return;
     }
-    const serverId = this.options.config.server?.id;
-    if (serverId && webhook.serverId && webhook.serverId !== serverId) {
+    if (webhook.serverId && webhook.serverId !== this.options.server.id) {
       this.options.log.debug('Ignoring %s from another server.', webhook.event);
       return;
     }
@@ -178,7 +201,7 @@ export class Controller {
   }
 
   private webhookContext(webhook: WebhookEvent): MatchContext {
-    const context = contextOf(webhook.session, webhook.media);
+    const context = contextOf(webhook.session, webhook.media, this.options.server.id);
     return { ...context, user: context.user ?? webhook.user };
   }
 
@@ -193,15 +216,29 @@ export class Controller {
 
   /** A state sensor is on when any player that passes its filters meets its condition. */
   private refreshStates(): void {
+    if (!this.ready) {
+      return;
+    }
     const snapshots = this.engine.snapshots();
+    const updates: { sensor: SensorOutput; active: boolean }[] = [];
     for (const sensor of this.options.sensors) {
       const condition = sensor.config.state;
       if (sensor.config.type === 'button' || !condition) {
         continue;
       }
-      sensor.setActive(snapshots.some((snapshot) => snapshot.session !== undefined
-        && matchesFilters(sensor.config.filters, contextOf(snapshot.session))
-        && stateHolds(condition, snapshot)));
+      const matching = snapshots.filter((snapshot) => snapshot.session !== undefined
+        && matchesFilters(sensor.config.filters, contextOf(snapshot.session, undefined, this.options.server.id)));
+      // "Nothing playing" is on while no matching player is busy; the rest are on while any player meets them.
+      updates.push({
+        sensor,
+        active: condition === 'idle'
+          ? matching.every((snapshot) => stateHolds('idle', snapshot))
+          : matching.some((snapshot) => stateHolds(condition, snapshot)),
+      });
+    }
+    // Turn states off before turning others on, so nothing ever sees two states at once.
+    for (const { sensor, active } of [...updates.filter((u) => !u.active), ...updates.filter((u) => u.active)]) {
+      sensor.setActive(active);
     }
   }
 

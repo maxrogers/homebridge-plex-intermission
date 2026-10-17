@@ -17,7 +17,7 @@ export const ENGINE_EVENTS: readonly EngineEventType[] = ['play', 'pause', 'resu
 export type WebhookOnlyEvent = (typeof WEBHOOK_EVENTS)[number];
 export type TriggerEvent = EngineEventType | WebhookOnlyEvent;
 
-export const STATE_CONDITIONS = ['playing', 'playing-any', 'paused', 'credits', 'active'] as const;
+export const STATE_CONDITIONS = ['playing', 'playing-any', 'paused', 'credits', 'active', 'idle'] as const;
 export type StateCondition = (typeof STATE_CONDITIONS)[number];
 
 export const SENSOR_TYPES = ['occupancy', 'motion', 'contact', 'button'] as const;
@@ -56,19 +56,21 @@ export interface WebhookConfig {
 
 export interface IntermissionConfig {
   name: string;
-  server?: ServerConfig;
+  /** Links the config to the saved sign-in; see Credentials.setupId. */
+  setupId?: string;
+  /** Servers to watch. Older configs with a single `server` are read as a list of one. */
+  servers: ServerConfig[];
   sensors: SensorConfig[];
   webhook: WebhookConfig;
   engine: EngineSettings;
   /** How often to re-read sessions while the notification stream is down and something plays. 0 disables. */
   safetyResyncMs: number;
-  /** True when the user chose the fallback; otherwise it follows Plex Pass status. */
-  fallbackConfigured: boolean;
   detailedLogging: boolean;
 }
 
 export const DEFAULT_WEBHOOK_PORT = 32550;
-export const DEFAULT_FALLBACK_PERCENT_WITHOUT_PLEX_PASS = 95;
+/** Used for movies and episodes that have no credits marker, unless the user turns it off. */
+export const DEFAULT_FALLBACK_PERCENT = 95;
 
 type Raw = Record<string, unknown>;
 
@@ -95,11 +97,14 @@ export function parseConfig(raw: unknown, log: Logger): IntermissionConfig {
   const server = asRecord(config.server);
 
   const fallback = timing.fallbackPercent;
-  const fallbackConfigured = fallback === null || typeof fallback === 'number';
   const engine: EngineSettings = {
     creditsOffsetMs: seconds(timing, 'creditsOffset', DEFAULT_ENGINE_SETTINGS.creditsOffsetMs, 0, 120),
-    useFirstCreditsMarker: typeof timing.firstCreditsMarker === 'boolean' ? timing.firstCreditsMarker : DEFAULT_ENGINE_SETTINGS.useFirstCreditsMarker,
-    fallbackPercent: typeof fallback === 'number' && Number.isFinite(fallback) ? Math.min(99, Math.max(50, Math.round(fallback))) : null,
+    creditsMode: timing.midCredits === 'first' || timing.midCredits === 'final' || timing.midCredits === 'scenes'
+      ? timing.midCredits
+      : (timing.firstCreditsMarker === false ? 'final' : DEFAULT_ENGINE_SETTINGS.creditsMode),
+    fallbackPercent: fallback === null
+      ? null
+      : (typeof fallback === 'number' && Number.isFinite(fallback) ? Math.min(99, Math.max(50, Math.round(fallback))) : DEFAULT_FALLBACK_PERCENT),
     rearmDistanceMs: seconds(timing, 'rearmDistance', DEFAULT_ENGINE_SETTINGS.rearmDistanceMs, 20, 600),
     pauseDebounceMs: seconds(timing, 'pauseDebounce', DEFAULT_ENGINE_SETTINGS.pauseDebounceMs, 0, 30),
     stopHoldMs: seconds(timing, 'stopHold', DEFAULT_ENGINE_SETTINGS.stopHoldMs, 0, 60),
@@ -111,12 +116,11 @@ export function parseConfig(raw: unknown, log: Logger): IntermissionConfig {
   const safetyResyncMs = timing.safetyResync === 0 ? 0 : seconds(timing, 'safetyResync', 5_000, 1, 30) * 60;
 
   const port = webhook.port;
-  const serverId = asString(server.id);
-  const serverUrl = asString(server.url);
 
   return {
     name: asString(config.name) ?? 'Intermission',
-    server: serverId && serverUrl ? { id: serverId, name: asString(server.name) ?? 'Plex', url: serverUrl } : undefined,
+    setupId: asString(config.setupId),
+    servers: parseServers(Array.isArray(config.servers) ? config.servers : (config.server ? [server] : [])),
     sensors: parseSensors(config.sensors, log),
     webhook: {
       enabled: webhook.enabled !== false,
@@ -125,9 +129,22 @@ export function parseConfig(raw: unknown, log: Logger): IntermissionConfig {
     },
     engine,
     safetyResyncMs,
-    fallbackConfigured,
     detailedLogging: config.detailedLogging === true,
   };
+}
+
+function parseServers(value: unknown[]): ServerConfig[] {
+  const seen = new Set<string>();
+  return value.flatMap((entry) => {
+    const server = asRecord(entry);
+    const id = asString(server.id);
+    const url = asString(server.url);
+    if (!id || !url || seen.has(id)) {
+      return [];
+    }
+    seen.add(id);
+    return [{ id, name: asString(server.name) ?? 'Plex', url }];
+  });
 }
 
 function parseSensors(value: unknown, log: Logger): SensorConfig[] {

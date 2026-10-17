@@ -21,22 +21,22 @@ class FakeStream extends EventEmitter {
   }
 }
 
-class FakeWebhooks extends EventEmitter {
-  async start() {}
-  async stop() {}
-}
+class FakeWebhooks extends EventEmitter {}
 
+const timeline = [];
 class FakeSensor {
   presses = 0;
-  active = false;
+  active = undefined;
   constructor(config) {
     this.config = config;
   }
   setActive(active) {
+    if (active !== this.active) timeline.push(`${this.config.name}=${active}`);
     this.active = active;
   }
   press() {
     this.presses++;
+    timeline.push(`${this.config.name} pressed`);
   }
 }
 
@@ -45,7 +45,9 @@ const SENSORS = [
   { id: 'credits', name: 'Credits Rolling', type: 'button', events: ['credits.start'] },
   { id: 'paused', name: 'Movie Paused', type: 'button', events: ['pause'] },
   { id: 'other-tv', name: 'Bedroom', type: 'occupancy', state: 'active', filters: { players: ['BEDROOM'] } },
-  { id: 'new', name: 'New Movie', type: 'button', events: ['library.new'], filters: { libraries: ['1'] } },
+  { id: 'new', name: 'New Movie', type: 'button', events: ['library.new'], filters: { libraries: ['server-1/1'] } },
+  { id: 'idle', name: 'Nothing Playing', type: 'occupancy', state: 'idle' },
+  { id: 'credits-state', name: 'In Credits', type: 'occupancy', state: 'credits' },
 ];
 
 function setup({ playing = [], markers = [{ type: 'credits', startMs: 100_000, endMs: 120_000, final: true }], raw = {} } = {}) {
@@ -54,7 +56,7 @@ function setup({ playing = [], markers = [{ type: 'credits', startMs: 100_000, e
   const webhooks = new FakeWebhooks();
   const errors = [];
   const log = { ...silentLog, error: (...args) => errors.push(args) };
-  const config = parseConfig({ server: { id: 'server-1', url: 'http://plex' }, sensors: SENSORS, ...raw }, silentLog);
+  const config = parseConfig({ servers: [{ id: 'server-1', name: 'Plex', url: 'http://plex' }], sensors: SENSORS, ...raw }, silentLog);
   const sensors = config.sensors.map((sensor) => new FakeSensor(sensor));
   const server = {
     playing: async () => (typeof playing === 'function' ? playing() : playing),
@@ -63,9 +65,10 @@ function setup({ playing = [], markers = [{ type: 'credits', startMs: 100_000, e
   let unauthorized = 0;
   const controller = new Controller({
     config,
+    server: config.servers[0],
     log,
     clock,
-    server,
+    plex: server,
     stream,
     webhooks,
     getMarkers: async () => markers,
@@ -167,5 +170,42 @@ test('a rejected sign-in is reported once', async () => {
   assert.equal(unauthorized(), 1);
   assert.equal(errors.length, 1);
   assert.match(errors[0][0], /sign in again/);
+  await controller.stop();
+});
+
+test('states keep their pre-restart value until Plex has been read', async () => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const { clock, stream, controller, sensors } = setup({ playing: async () => { await gate; return [notify('playing', 10_000)]; } });
+  await controller.start();
+  stream.connect();
+  await settle();
+  assert.equal(sensors.idle.active, undefined, 'nothing published while Plex has not answered');
+  release();
+  await settle(); await settle();
+  assert.equal(sensors.playing.active, true);
+  assert.equal(sensors.idle.active, false);
+  await clock.advance(30_000);
+  await controller.stop();
+});
+
+test('with nothing playing, Nothing Playing turns on after the first read', async () => {
+  const { stream, controller, sensors } = setup({ playing: [] });
+  await controller.start();
+  stream.connect();
+  await settle(); await settle();
+  assert.equal(sensors.idle.active, true);
+  assert.equal(sensors.playing.active, false);
+  await controller.stop();
+});
+
+test('at the credits, states change before the button press, offs before ons', async () => {
+  const { clock, stream, controller } = setup();
+  await controller.start();
+  stream.emit('playing', notify('playing', 95_000));
+  await settle();
+  timeline.length = 0;
+  await clock.advance(6_000);
+  assert.deepEqual(timeline, ['Movie Playing=false', 'In Credits=true', 'Credits Rolling pressed']);
   await controller.stop();
 });
