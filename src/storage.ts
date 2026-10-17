@@ -28,6 +28,15 @@ export interface PluginState {
  * Files in `<Homebridge storage>/intermission`. Credentials are written atomically with owner-only
  * permissions and never leave this module except to make Plex requests.
  */
+/** The last Plex Pass status seen, and whether the user has seen the latest change. */
+export interface PlexPassRecord {
+  active: boolean;
+  /** When the status last changed (ISO date). */
+  changedAt: string;
+  /** False until the settings page has shown the change. */
+  acknowledged: boolean;
+}
+
 /** The token to use for a server. */
 export function serverToken(credentials: Credentials, serverId: string): string {
   return credentials.serverTokens?.[serverId] ?? credentials.serverToken ?? credentials.accountToken;
@@ -42,6 +51,44 @@ export class Storage {
 
   private get credentialsFile(): string {
     return join(this.directory, 'credentials.json');
+  }
+
+  private get plexPassFile(): string {
+    return join(this.directory, 'plex-pass.json');
+  }
+
+  /**
+   * Records the Plex Pass status. The first record is silent; a later change is kept unacknowledged
+   * until the settings page shows it. Returns the record.
+   */
+  async recordPlexPass(active: boolean, now = new Date()): Promise<PlexPassRecord> {
+    const previous = await this.readPlexPass();
+    if (previous && previous.active === active) {
+      return previous;
+    }
+    const record: PlexPassRecord = { active, changedAt: now.toISOString(), acknowledged: previous === undefined };
+    await this.writeJson(this.plexPassFile, record);
+    return record;
+  }
+
+  async readPlexPass(): Promise<PlexPassRecord | undefined> {
+    const value = await this.readJson(this.plexPassFile);
+    return value && typeof value.active === 'boolean' && typeof value.changedAt === 'string'
+      ? { active: value.active, changedAt: value.changedAt, acknowledged: value.acknowledged !== false }
+      : undefined;
+  }
+
+  async acknowledgePlexPass(): Promise<void> {
+    const record = await this.readPlexPass();
+    if (record && !record.acknowledged) {
+      await this.writeJson(this.plexPassFile, { ...record, acknowledged: true });
+    }
+  }
+
+  /** Removes the sign-in and Plex Pass history. Keeps the client id and webhook key. */
+  async reset(): Promise<void> {
+    await rm(this.credentialsFile, { force: true });
+    await rm(this.plexPassFile, { force: true });
   }
 
   private get stateFile(): string {

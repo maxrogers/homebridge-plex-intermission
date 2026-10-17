@@ -6,7 +6,6 @@ import {
 
 const root = document.getElementById('intermission');
 const POLL_MS = 2000;
-const CREDIT_KINDS = new Set(['movie', 'show']);
 
 const state = {
   config: undefined,
@@ -447,7 +446,8 @@ function main() {
   const tabs = { sensors: 'Sensors', recipes: 'Recipes & Notes', advanced: 'Advanced' };
   const nav = Object.entries(tabs).map(([id, label]) => `<button class="im-tab" role="tab" aria-selected="${state.tab === id}" data-action="tab" data-id="${id}">${label}</button>`).join('');
   const content = { sensors: sensorsTab, recipes: recipesTab, advanced: advancedTab }[state.tab]();
-  const pass = state.status.plexPass === undefined ? '' : `<span class="im-badge ${state.status.plexPass ? 'on' : ''}">${state.status.plexPass ? 'Plex Pass' : 'No Plex Pass'}</span>`;
+  const pass = state.status.plexPass === undefined ? ''
+    : `<button class="im-badge ${state.status.plexPass ? 'on' : ''}" data-action="open-webhooks" title="Plex Pass and webhooks">${state.status.plexPass ? 'Plex Pass' : 'No Plex Pass'}</button>`;
   return `<div class="im-header">
       <img src="icon.svg" alt="">
       <div class="im-who"><strong>${escape(servers().map((s) => s.name).join(', ') || 'Plex')}</strong><br>
@@ -457,7 +457,27 @@ function main() {
     </div>
     ${state.status.signedIn ? '' : '<div class="im-alert">Signed out. <button class="im-link" data-action="to-signin">Sign in again</button></div>'}
     ${notices()}
+    ${plexPassChangeBanner()}
     <div class="im-tabs" role="tablist">${nav}</div>${content}`;
+}
+
+function plexPassChangeBanner() {
+  const change = state.status.plexPassChange;
+  if (!change) {
+    return '';
+  }
+  const when = new Date(change.changedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return change.active
+    ? `<div class="im-card im-banner mb-3"><strong>Plex Pass detected (${escape(when)}).</strong>
+        Add the Intermission webhook for instant play detection and the Plex Pass events. New media will get credits markers again.
+        <div class="d-flex gap-2 mt-2"><button class="btn btn-sm btn-im" data-action="open-webhooks">Set up webhooks</button>
+        <button class="btn btn-sm btn-outline-secondary" data-action="ack-plexpass">Dismiss</button></div></div>`
+    : `<div class="im-card im-banner mb-3"><strong>Plex Pass ended (detected ${escape(when)}).</strong>
+        Intermission switched to basic playback detection on its own; your sensors keep working.
+        <div class="mt-2">${noPlexPassSummary()}</div>
+        ${state.config.sensors.some((s) => needsPlexPass(s)) ? '<p class="small mb-1">Buttons that only use Plex Pass events are marked "Needs Plex Pass" and won\'t press until Plex Pass returns.</p>' : ''}
+        <div class="d-flex gap-2 mt-2"><button class="btn btn-sm btn-outline-secondary" data-action="recheck-plexpass">Check again</button>
+        <button class="btn btn-sm btn-outline-secondary" data-action="ack-plexpass">Dismiss</button></div></div>`;
 }
 
 function sensorsTab() {
@@ -516,8 +536,6 @@ function editor(sensor, sel) {
   const many = new Set(libraries.map((l) => l.serverId)).size > 1;
   const chosenLibraries = sensor.filters.libraries.length > 0 ? libraries.filter((l) => sensor.filters.libraries.includes(l.key)) : libraries;
   const mediaTypes = availableMediaTypes(chosenLibraries);
-  const usesCredits = (sensor.events ?? []).some((e) => e.startsWith('credits')) || sensor.state === 'credits' || sensor.state === 'playing';
-  const noCredits = usesCredits && chosenLibraries.some((l) => !CREDIT_KINDS.has(l.kind));
   const noPass = state.status.plexPass === false;
   const confirming = state.confirming === `delete:${sensor.id}`;
   return `<div class="im-editor" data-sensor="${escape(sensor.id)}">
@@ -536,9 +554,9 @@ function editor(sensor, sel) {
     ${filter('users', users, (u) => u, 'All Plex Home users')}
     <label class="im-label">Libraries</label>
     ${filter('libraries', libraries, (l) => (many ? `${l.title} · ${l.serverName}` : l.title), 'All libraries')}
-    ${mediaTypes.length > 1 ? `<label class="im-label">Media types</label>
+    ${sensor.filters.mediaTypes.length > 0 ? `<label class="im-label">Media types <span>(from an older version; libraries now decide this)</span></label>
       ${filter('mediaTypes', mediaTypes, (t) => MEDIA_TYPES[t], 'All media types')}` : ''}
-    ${noCredits ? '<p class="im-hint mt-2">Music, photos and other videos have no credits, so this sensor treats them as playing until they pause or stop.</p>' : ''}
+    <p class="im-hint mt-2">Intermission knows each library's type: Movies and TV Shows get credits handling; Music, Photos and Other Videos just follow play, pause and stop.</p>
     <div class="d-flex gap-2 mt-3">
       <button class="btn btn-sm ${confirming ? 'btn-danger' : 'btn-outline-danger'}" data-action="delete" data-id="${escape(sensor.id)}">${confirming ? 'Tap again to remove' : `Remove ${sensor.type === 'button' ? 'button' : 'sensor'}`}</button>
       ${confirming ? '<button class="btn btn-sm btn-outline-secondary" data-action="cancel-confirm">Keep it</button>' : ''}
@@ -566,6 +584,19 @@ const PORT_TEXT = {
 };
 
 /** Plex Pass, server settings, the account's webhooks with remove buttons, and Intermission's. */
+/** What an account without Plex Pass does not get. Shown only to those accounts. */
+function noPlexPassSummary() {
+  return `<div class="im-status warn"><span class="im-dot"></span><div>
+      <strong>No Plex Pass on this account</strong>
+      <small>Intermission works without it. Pause, resume, stop, skips and the credits all work. What you don't get:</small>
+      <ul class="small mb-0 mt-1 im-list">
+        <li><strong>Instant play:</strong> Plex reports play up to about 10 seconds after you press it, so the lights follow a little later. Everything else is instant.</li>
+        <li><strong>New credits markers:</strong> Plex only finds credits on servers with Plex Pass. Items that already have markers still use them; the rest use 95% of the runtime, with no mid-credits scenes.</li>
+        <li><strong>Plex Pass events:</strong> "Marked as watched", "Rated", "Added to a library" and similar events can't be used on buttons.</li>
+      </ul>
+    </div></div>`;
+}
+
 function webhookPanel() {
   const hook = state.webhook;
   if (!hook) {
@@ -575,12 +606,10 @@ function webhookPanel() {
     return `<div class="im-alert im-alert-danger">${escape(hook.error)}</div>`;
   }
   const plan = state.webhookPlan;
-  const passRow = `<div class="im-status ${hook.plexPass ? 'ok' : 'warn'}"><span class="im-dot"></span><div>
-      <strong>${hook.plexPass ? 'Plex Pass is active' : 'No Plex Pass on this account'}</strong>
-      <small>${hook.plexPass
-        ? 'Webhooks make play detection instant and add events such as "Marked as watched" and "Added to a library".'
-        : 'Intermission still works without it: pause, resume and stop are instant, play is noticed within about 10 seconds, and credits use markers already on your server or 95% of the runtime. Webhooks and their events need Plex Pass.'}</small>
-    </div></div>`;
+  const passRow = hook.plexPass
+    ? `<div class="im-status ok"><span class="im-dot"></span><div><strong>Plex Pass is active</strong>
+        <small>Webhooks make play detection instant and add events such as "Marked as watched" and "Added to a library".</small></div></div>`
+    : noPlexPassSummary();
   if (!hook.plexPass) {
     return passRow;
   }
@@ -683,7 +712,7 @@ function advancedTab() {
           <option value="final" ${(timing.midCredits ?? (timing.firstCreditsMarker === false ? 'final' : 'scenes')) === 'final' ? 'selected' : ''}>Lights down until the final credits</option></select>
       </div>
       <div class="im-field">
-        <label for="im-fallback"><strong>When a movie or episode has no credits marker</strong><small>Plex adds markers when it analyses new media. Until then, use a share of the runtime. With or without Plex Pass.</small></label>
+        <label for="im-fallback"><strong>When a movie or episode has no credits marker</strong><small>With Plex Pass, Plex adds markers when it analyses new media; without it, only items that already have markers do. Otherwise use a share of the runtime. Movies and TV only.</small></label>
         <div><select id="im-fallback" class="form-select form-select-sm" data-fallback>
           <option value="percent" ${fallbackOff ? '' : 'selected'}>Use a percentage</option>
           <option value="off" ${fallbackOff ? 'selected' : ''}>No credits event</option></select>
@@ -702,7 +731,7 @@ function advancedTab() {
           ${state.webhook.registered ? `<button class="btn btn-sm ${state.confirming === 'remove-webhook' ? 'btn-danger' : 'btn-outline-danger'} ms-auto" data-action="remove-webhook">${state.confirming === 'remove-webhook' ? 'Tap again to remove' : 'Remove Intermission webhook'}</button>` : ''}
         </div>` : ''}
       </div>
-      <div class="im-field">
+${state.status.plexPass === false ? '' : `      <div class="im-field">
         <label for="im-webhook"><strong>Receive Plex webhooks</strong><small>Needs Plex Pass. Makes play detection instant.</small></label>
         <div class="form-check form-switch"><input id="im-webhook" class="form-check-input" type="checkbox" data-webhook-enabled ${webhook.enabled === false ? '' : 'checked'}></div>
       </div>
@@ -714,15 +743,22 @@ function advancedTab() {
         <label for="im-address"><strong>Homebridge address for Plex</strong><small>Leave empty to detect it. Example: http://10.0.0.5:32550</small></label>
         <input id="im-address" type="url" class="form-control form-control-sm" data-webhook-address placeholder="Automatic" value="${escape(webhook.advertisedUrl ?? '')}">
       </div>
-      <div class="im-field">
+`}      <div class="im-field">
         <label for="im-detailed"><strong>Detailed logging</strong><small>Logs every event and timer decision. Turn on when reporting a problem.</small></label>
         <div class="form-check form-switch"><input id="im-detailed" class="form-check-input" type="checkbox" data-detailed ${state.config.detailedLogging ? 'checked' : ''}></div>
       </div>
     </div>
     <div class="d-flex flex-wrap gap-2">
-      <button class="btn btn-outline-secondary" data-action="reset-advanced">Reset to defaults</button>
+      <button class="btn ${state.confirming === 'reset-advanced' ? 'btn-danger' : 'btn-outline-secondary'}" data-action="reset-advanced">${state.confirming === 'reset-advanced' ? 'Tap again to reset these settings' : 'Reset advanced settings'}</button>
       <button class="btn btn-outline-secondary" data-action="redo-setup">Change servers, players and libraries</button>
       <button class="btn ${state.confirming === 'signout' ? 'btn-danger' : 'btn-outline-danger'} ms-auto" data-action="signout">${state.confirming === 'signout' ? 'Tap again to sign out' : 'Sign out of Plex'}</button>
+    </div>
+    ${state.confirming === 'reset-advanced' ? '<p class="im-hint">Resets only the settings on this page. Sensors, sign-in and webhooks stay as they are.</p>' : ''}
+    <div class="im-card mt-3 im-danger-zone">
+      <strong>Reset Intermission</strong>
+      <p class="small mb-2 mt-1">Starts over as if freshly installed: signs out of Plex, removes the Intermission webhook from your Plex account, and deletes all sensors and settings. Removed sensors disappear from Apple Home, and automations that use them stop working. Homebridge then asks to restart, and setup starts again here.</p>
+      <button class="btn btn-sm ${state.confirming === 'reset-plugin' ? 'btn-danger' : 'btn-outline-danger'}" data-action="reset-plugin">${state.confirming === 'reset-plugin' ? 'Tap again to reset everything' : 'Reset Intermission…'}</button>
+      ${state.confirming === 'reset-plugin' ? '<button class="btn btn-sm btn-outline-secondary ms-2" data-action="cancel-confirm">Cancel</button>' : ''}
     </div>
     <div class="im-card mt-3">
       <div class="d-flex align-items-center mb-2"><strong>About this setup</strong>
@@ -914,13 +950,33 @@ const actions = {
     state.report = await request('/report', reportBody());
   }),
   'copy-report': () => copy(state.report, 'Copied.'),
-  'reset-advanced': () => {
+  'reset-advanced': () => confirmThen('reset-advanced', () => {
     delete state.config.timing;
     delete state.config.webhook;
     delete state.config.detailedLogging;
-    homebridge.toast.info('Advanced settings reset. Press Save to keep them.');
+    homebridge.toast.success('Advanced settings are back to their defaults. Press Save to keep them.');
     return changed();
+  }),
+  'reset-plugin': () => confirmThen('reset-plugin', () => busy('Resetting Intermission…', async () => {
+    const result = await request('/reset', webhookBody());
+    state.config = { platform: PLATFORM, name: state.config.name ?? 'Intermission', sensors: [] };
+    await saveConfig({ persist: true });
+    state.status = { signedIn: false };
+    state.discovery = undefined;
+    state.webhook = undefined;
+    homebridge.toast.success(`Intermission was reset${result.webhookRemoved ? ' and its webhook removed from Plex' : ''}. Restart Homebridge when asked, then set it up again.`, 'Reset');
+    // Closing the settings lets Homebridge offer the restart for the changed config.
+    homebridge.closeSettings();
+  })),
+  'ack-plexpass': async () => {
+    await request('/plexpass/ack');
+    state.status.plexPassChange = undefined;
+    render();
   },
+  'recheck-plexpass': () => busy('Checking Plex Pass…', async () => {
+    state.status = await request('/status', { setupId: state.config.setupId });
+    await refreshWebhook();
+  }),
   'redo-setup': () => loadServers(),
   signout: () => confirmThen('signout', () => busy('Signing out…', async () => {
     state.status = await request('/signout');

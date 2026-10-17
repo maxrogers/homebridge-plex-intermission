@@ -285,6 +285,14 @@ Registering the webhook changes the user's Plex account, so it is offered rather
 - **Log:** one line points to the settings page.
 - **Existing setup:** nothing changes. The fallback stays on as a safety net for items without markers.
 
+### As built
+
+- Plex Pass is read at sign-in, on Homebridge start, once a day and whenever the settings page opens. The last status
+  is kept in `plex-pass.json`; a change is shown on the settings page until dismissed, and logged once.
+- Without Plex Pass the webhook receiver is not started; when Plex Pass returns it starts without a restart.
+- The percentage fallback for missing markers applies with or without Plex Pass (movies and episodes only; not Other
+  Videos), so nothing about credits needs to switch over.
+
 ### Plex Pass ends
 
 1. Detected by the daily check or the missing-webhook evidence.

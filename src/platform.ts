@@ -6,6 +6,8 @@ import { parseConfig, type IntermissionConfig } from './config.js';
 import { Controller, type SensorOutput } from './controller.js';
 import { systemClock } from './engine/clock.js';
 import type { Logger } from './engine/types.js';
+import { CREDITED_TYPES } from './engine/credits.js';
+import { libraryKind } from './plex/discovery.js';
 import { MarkerCache } from './plex/marker-cache.js';
 import { NotificationStream } from './plex/notifications.js';
 import { PlexTv } from './plex/plex-tv.js';
@@ -19,6 +21,8 @@ import { serverToken, Storage } from './storage.js';
  * Several servers can drive the same sensor. A state sensor is on while any server says so;
  * presses pass straight through.
  */
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 class SensorHub {
   /** Servers voting "on", or for "Nothing playing", servers voting "off" (busy). */
   private readonly votes = new Set<number>();
@@ -50,6 +54,7 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
   private readonly settings: IntermissionConfig;
   private readonly controllers: Controller[] = [];
   private webhooks?: WebhookServer;
+  private dailyTimer?: NodeJS.Timeout;
 
   constructor(
     private readonly logging: Logging,
@@ -62,6 +67,7 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
       this.start().catch((error: unknown) => this.log.error('Could not start: %s', error instanceof Error ? error.message : String(error)));
     });
     this.api.on('shutdown', () => {
+      clearInterval(this.dailyTimer);
       for (const controller of this.controllers) {
         void controller.stop();
       }
@@ -92,7 +98,10 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
       return;
     }
     if (plexPass === false) {
-      this.log.info('No Plex Pass: play is noticed at the first progress report, and webhook-only events are unavailable.');
+      this.log.info('No Plex Pass: play is noticed at the first progress report, new media gets no credits markers, and webhook-only events are unavailable.');
+    }
+    if (plexPass !== undefined) {
+      await storage.recordPlexPass(plexPass);
     }
 
     const feed = new EventEmitter<{ payload: [unknown] }>();
@@ -100,8 +109,29 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
       await this.startWebhooks(state.webhookSecret, feed);
     }
 
+    // "Other Videos" libraries hold movies to Plex, but they have no credits.
+    const personal = new Set<string>();
+    const hasCredits = (serverId: string) => (media: { type: string; librarySectionId?: string }) =>
+      CREDITED_TYPES.has(media.type) && !personal.has(`${serverId}/${media.librarySectionId}`);
+
+    const plexServers = servers.map((server) => new PlexServer({ baseUrl: server.url, token: serverToken(credentials, server.id), clientIdentifier: state.clientIdentifier }));
+    const readLibraries = async () => {
+      await Promise.all(servers.map(async (server, index) => {
+        const libraries = await plexServers[index]!.libraries().catch(() => undefined);
+        for (const library of libraries ?? []) {
+          const key = `${server.id}/${library.id}`;
+          if (libraryKind(library) === 'other') {
+            personal.add(key);
+          } else {
+            personal.delete(key);
+          }
+        }
+      }));
+    };
+    await readLibraries();
+
     servers.forEach((server, index) => {
-      const plex = new PlexServer({ baseUrl: server.url, token: serverToken(credentials, server.id), clientIdentifier: state.clientIdentifier });
+      const plex = plexServers[index]!;
       const markers = new MarkerCache((ratingKey) => plex.markers(ratingKey), systemClock);
       const controller = new Controller({
         config: this.settings,
@@ -112,12 +142,41 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
         stream: new NotificationStream({ url: plex.notificationsUrl(), log: this.log }),
         webhooks: feed,
         getMarkers: (ratingKey) => markers.get(ratingKey),
+        hasCredits: hasCredits(server.id),
         sensors: hubs.map((hub) => hub.output(index)),
       });
       this.controllers.push(controller);
       void controller.start();
     });
     this.log.info('Watching %s with %d sensor%s.', servers.map((s) => s.name).join(' and '), hubs.length, hubs.length === 1 ? '' : 's');
+
+    // Once a day: Plex Pass status and the library list.
+    this.dailyTimer = setInterval(() => {
+      void readLibraries();
+      void this.dailyPlexPassCheck(plexTv, credentials.accountToken, storage, state.webhookSecret, feed);
+    }, DAY_MS);
+    this.dailyTimer.unref();
+  }
+
+  /** Notices Plex Pass ending or starting, adjusts webhooks, and leaves a notice for the settings page. */
+  private async dailyPlexPassCheck(plexTv: PlexTv, token: string, storage: Storage, secret: string, feed: EventEmitter<{ payload: [unknown] }>): Promise<void> {
+    const active = await this.checkPlexPass(plexTv, token);
+    if (active === undefined || active === 'unauthorized') {
+      return;
+    }
+    const before = await storage.readPlexPass();
+    await storage.recordPlexPass(active);
+    if (before?.active === active) {
+      return;
+    }
+    if (active) {
+      this.log.info('Plex Pass detected. Open the plugin settings to add the Intermission webhook for instant play detection and more events.');
+      if (this.settings.webhook.enabled && !this.webhooks) {
+        await this.startWebhooks(secret, feed);
+      }
+    } else {
+      this.log.warn('Plex Pass ended. Intermission keeps working: play is noticed at the first progress report, new media gets no credits markers (95% of the runtime is used), and webhook-only events stop.');
+    }
   }
 
   private async startWebhooks(secret: string, feed: EventEmitter<{ payload: [unknown] }>): Promise<void> {

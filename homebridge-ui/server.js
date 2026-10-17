@@ -14,6 +14,8 @@ class IntermissionUiServer extends HomebridgePluginUiServer {
 
     this.handle('/status', (body) => service.status(typeof body.setupId === 'string' ? body.setupId : undefined));
     this.handle('/about', () => service.about());
+    this.handle('/plexpass/ack', () => service.acknowledgePlexPass());
+    this.handle('/reset', (body) => service.resetPlugin(webhook(body)));
     this.handle('/signin/start', (body) => service.startSignIn(body.mode === 'code' ? 'code' : 'browser'));
     this.handle('/signin/check', () => service.checkSignIn());
     this.handle('/signout', () => service.signOut());

@@ -201,3 +201,8 @@
   .im .im-field { grid-template-columns: 1fr; }
   .im .im-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+.im .im-danger-zone { border-color: var(--im-danger); }
+.im .im-list { padding-left: 1.1rem; }
+.im .im-list li { margin-bottom: 0.2rem; }
+.im button.im-badge { background: transparent; cursor: pointer; }

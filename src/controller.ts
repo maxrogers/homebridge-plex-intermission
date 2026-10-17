@@ -46,6 +46,8 @@ export interface ControllerOptions {
   stream: StreamApi;
   webhooks?: WebhookApi;
   getMarkers(ratingKey: string): Promise<readonly Marker[]>;
+  /** Whether an item can have credits; see EngineDependencies.hasCredits. */
+  hasCredits?(media: SessionInfo['media']): boolean;
   sensors: readonly SensorOutput[];
   /** Called once when Plex rejects the saved sign-in. */
   onUnauthorized?(): void;
@@ -79,6 +81,7 @@ export class Controller {
       log: options.log,
       resolveSession: (playerId, sessionKey) => this.call(() => options.plex.session(playerId, sessionKey), undefined),
       getMarkers: (ratingKey) => this.call(() => options.getMarkers(ratingKey), []),
+      hasCredits: options.hasCredits,
     }, options.config.engine);
 
     this.engine.on('event', (event) => this.onEngineEvent(event));

@@ -57,7 +57,7 @@ export function availableMediaTypes(libraries) {
 /** Advanced settings. Values are stored in config `timing` in seconds; `scale` converts for display. */
 export const TIMING_FIELDS = [
   { key: 'creditsOffset', label: 'Credits offset', help: 'Wait this long after the credits marker. Never earlier than the marker.', unit: 's', min: 0, max: 120, default: 0 },
-  { key: 'rearmDistance', label: 'Credits re-arm distance', help: 'Rewinding further than this before the credits ends the credits state.', unit: 's', min: 20, max: 600, default: 60 },
+  { key: 'rearmDistance', label: 'Credits re-arm distance', help: 'Rewinds shorter than this never change the credits state, so the rewind Plex does on resume can\'t flick the lights.', unit: 's', min: 20, max: 600, default: 60 },
   { key: 'pauseDebounce', label: 'Pause debounce', help: 'Pauses shorter than this are ignored.', unit: 's', min: 0, max: 30, default: 2 },
   { key: 'stopHold', label: 'Stop hold', help: 'Waits this long after a stop, so autoplaying the next episode is not a stop.', unit: 's', min: 0, max: 60, default: 10 },
   { key: 'minItemLength', label: 'Minimum item length', help: 'Shorter items, such as trailers, are ignored. 0 turns this off.', unit: 'min', scale: 60, min: 0, max: 60, default: 0 },

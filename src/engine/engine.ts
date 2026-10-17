@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 
 import type { Clock, TimerHandle } from './clock.js';
-import { creditsRanges, type CreditsRange } from './credits.js';
+import { CREDITED_TYPES, creditsRanges, type CreditsRange } from './credits.js';
 import type {
   EngineEvent,
   EngineEventType,
@@ -22,6 +22,11 @@ export interface EngineDependencies {
   /** Looks up player, user and media for a session that arrived without a webhook. */
   resolveSession(playerId: string, sessionKey: string): Promise<SessionInfo | undefined>;
   getMarkers(ratingKey: string): Promise<readonly Marker[]>;
+  /**
+   * Whether an item can have credits. Defaults to movies and episodes; the platform also excludes
+   * "Other Videos" libraries, whose items are movies to Plex but have no credits.
+   */
+  hasCredits?(media: SessionInfo['media']): boolean;
 }
 
 interface PlayerRecord {
@@ -251,7 +256,9 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
     if (generation !== player.generation) {
       return;
     }
-    player.credits = creditsRanges(markers, player.session?.media.durationMs, this.settings, player.session?.media.type);
+    const media = player.session?.media;
+    const credited = media ? (this.deps.hasCredits?.(media) ?? CREDITED_TYPES.has(media.type)) : false;
+    player.credits = credited ? creditsRanges(markers, media?.durationMs, this.settings, media?.type) : [];
     this.deps.log.debug('%s: credits %s', label(player), player.credits.length === 0
       ? 'none'
       : player.credits.map((r) => `${formatTime(r.startMs)}-${r.endMs === Infinity ? 'end' : formatTime(r.endMs)}`).join(', '));

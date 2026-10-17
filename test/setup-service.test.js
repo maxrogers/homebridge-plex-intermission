@@ -161,3 +161,27 @@ test('a sign-in left from a removed install is erased', async (t) => {
   assert.equal((await service.status(undefined)).signedIn, false, 'config without a setup id');
   assert.equal(await storage.readCredentials(), undefined);
 });
+
+test('a Plex Pass change is noticed once and kept until acknowledged', async (t) => {
+  const { service, storage } = await fakePlex(t);
+  assert.equal((await service.status('setup-1')).plexPassChange, undefined, 'first sight is silent');
+  await storage.recordPlexPass(false, new Date('2026-10-30T12:00:00Z')); // the daily check saw it end
+  await storage.recordPlexPass(true, new Date('2026-11-02T12:00:00Z'));
+  let status = await service.status('setup-1');
+  assert.equal(status.plexPassChange.active, true);
+  status = await service.status('setup-1');
+  assert.ok(status.plexPassChange, 'still shown until dismissed');
+  await service.acknowledgePlexPass();
+  assert.equal((await service.status('setup-1')).plexPassChange, undefined);
+});
+
+test('reset removes the webhook, the sign-in and the Plex Pass history', async (t) => {
+  const { service, storage, state, servers, secret } = await fakePlex(t, { webhooks: ['https://other.example/hook'] });
+  await service.addWebhook({ servers });
+  assert.ok(state.webhooks.some((url) => url.endsWith(secret)));
+  const result = await service.resetPlugin({ servers });
+  assert.equal(result.webhookRemoved, true);
+  assert.deepEqual(state.webhooks, ['https://other.example/hook']);
+  assert.equal(await storage.readCredentials(), undefined);
+  assert.equal(await storage.readPlexPass(), undefined);
+});

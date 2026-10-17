@@ -91,7 +91,11 @@ export class SetupService {
    * Sign-in state for the config's `setupId`. A saved sign-in that belongs to no config (left
    * behind when the plugin was removed and its config deleted) is erased, so a reinstall starts fresh.
    */
-  async status(setupId?: string): Promise<{ signedIn: boolean; username?: string; plexPass?: boolean; expired?: boolean; warning?: string }> {
+  async status(setupId?: string): Promise<{
+    signedIn: boolean; username?: string; plexPass?: boolean; expired?: boolean; warning?: string;
+    /** A Plex Pass change the user has not seen yet. */
+    plexPassChange?: { active: boolean; changedAt: string };
+  }> {
     const credentials = await this.options.storage.readCredentials();
     if (!credentials) {
       return { signedIn: false };
@@ -102,12 +106,25 @@ export class SetupService {
     }
     try {
       const user = await (await this.plexTv()).user(credentials.accountToken);
-      return { signedIn: true, username: user.title || user.username, plexPass: user.plexPass };
+      const record = await this.options.storage.recordPlexPass(user.plexPass, new Date(this.now()));
+      return {
+        signedIn: true,
+        username: user.title || user.username,
+        plexPass: user.plexPass,
+        plexPassChange: record.acknowledged ? undefined : { active: record.active, changedAt: record.changedAt },
+      };
     } catch (error) {
       if (error instanceof PlexHttpError && error.status === 401) {
         return { signedIn: false, expired: true };
       }
-      return { signedIn: true, username: credentials.username, warning: describe(error) };
+      const record = await this.options.storage.readPlexPass();
+      return {
+        signedIn: true,
+        username: credentials.username,
+        plexPass: record?.active,
+        warning: describe(error),
+        plexPassChange: record && !record.acknowledged ? { active: record.active, changedAt: record.changedAt } : undefined,
+      };
     }
   }
 
@@ -138,7 +155,31 @@ export class SetupService {
     const username = user.title || user.username;
     const setupId = randomUUID();
     await this.options.storage.writeCredentials({ accountToken: token, username, savedAt: new Date(this.now()).toISOString(), setupId });
+    await this.options.storage.recordPlexPass(user.plexPass, new Date(this.now()));
     return { done: true, username, plexPass: user.plexPass, setupId };
+  }
+
+  acknowledgePlexPass(): Promise<void> {
+    return this.options.storage.acknowledgePlexPass();
+  }
+
+  /**
+   * Full reset: removes Intermission's webhook from the Plex account when possible, then the sign-in
+   * and Plex Pass history. The settings page clears the plugin's config.
+   */
+  async resetPlugin(options: WebhookOptions): Promise<{ webhookRemoved: boolean }> {
+    let webhookRemoved = false;
+    try {
+      if ((await this.options.storage.readCredentials()) && options.servers.length > 0) {
+        const status = await this.removeWebhook(options);
+        webhookRemoved = status.plexPass && !status.registered;
+      }
+    } catch {
+      // Best effort: the reset must work offline too.
+    }
+    this.pending = undefined;
+    await this.options.storage.reset();
+    return { webhookRemoved };
   }
 
   async signOut(): Promise<{ signedIn: false }> {

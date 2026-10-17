@@ -204,3 +204,19 @@ test('a resume rewind from the final credits into the scene keeps the credits', 
   await clock.advance(20_000);
   assert.deepEqual(types(events), ['play', 'credits.start', 'pause', 'seek', 'resume']);
 });
+
+test('items without credits (music, photos, Other Videos) never get a credits event', async () => {
+  const media = (type, librarySectionId = '1') => ({ 7: session({ media: { ratingKey: '1', title: 'Item', type, durationMs: 200_000, librarySectionId } }) });
+  const run = async (options) => {
+    const { engine, clock, events } = createEngine({ settings: { fallbackPercent: 95 }, ...options });
+    notify(engine, 'playing', 180_000);
+    await settle();
+    await clock.advance(30_000);
+    return types(events);
+  };
+  assert.deepEqual(await run({ sessions: media('movie') }), ['play', 'credits.start'], 'a movie uses the fallback');
+  assert.deepEqual(await run({ sessions: media('track') }), ['play'], 'a track does not');
+  const notOtherVideos = (m) => m.librarySectionId !== '9';
+  assert.deepEqual(await run({ sessions: media('movie', '9'), hasCredits: notOtherVideos }), ['play'], 'an Other Videos item does not');
+  assert.deepEqual(await run({ sessions: media('movie', '9'), hasCredits: notOtherVideos, markers: [credits(190_000)] }), ['play'], 'not even with a marker');
+});
