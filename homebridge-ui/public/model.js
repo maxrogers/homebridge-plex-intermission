@@ -12,7 +12,7 @@ export const SENSOR_TYPES = {
 export const CONDITIONS = {
   playing: 'Playing, before the credits',
   'playing-any': 'Playing, including the credits',
-  paused: 'Paused',
+  paused: 'Paused, outside the credits',
   credits: 'In the credits',
   active: 'Anything playing or paused',
   idle: 'Nothing playing',

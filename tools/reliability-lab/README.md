@@ -18,6 +18,7 @@ cd tools/reliability-lab
 npm install --ignore-scripts   # skips hap-controller's optional Bluetooth build
 node lab.mjs run               # scripted scenarios, about 4 minutes
 SEED=7 ROUNDS=40 node fuzz.mjs fuzz   # randomised actions and hub outages, about 11 minutes
+node scene.mjs scene           # a movie with a mid-credits scene: which of the four sensors is on, about 1.5 minutes
 ```
 
 Results go to `results-<label>.json` and `homebridge-<label>.log`. What it cannot test: Apple's own hub software. The

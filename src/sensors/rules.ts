@@ -34,7 +34,8 @@ export function stateHolds(condition: StateCondition, snapshot: PlayerSnapshot):
     case 'playing-any':
       return snapshot.activity === 'playing';
     case 'paused':
-      return snapshot.activity === 'paused';
+      // Pausing during the credits stays "credits", so exactly one of playing, paused, credits and idle holds.
+      return snapshot.activity === 'paused' && !snapshot.inCredits;
     case 'credits':
       return snapshot.activity !== 'idle' && snapshot.inCredits;
     case 'active':

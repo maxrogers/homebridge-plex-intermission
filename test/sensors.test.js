@@ -26,6 +26,7 @@ test('state conditions', () => {
   assert.equal(stateHolds('playing', snapshot('playing', true)), false);
   assert.equal(stateHolds('playing-any', snapshot('playing', true)), true);
   assert.equal(stateHolds('paused', snapshot('paused')), true);
+  assert.equal(stateHolds('paused', snapshot('paused', true)), false, 'a pause in the credits stays credits');
   assert.equal(stateHolds('credits', snapshot('paused', true)), true);
   assert.equal(stateHolds('credits', snapshot('idle', true)), false);
   assert.equal(stateHolds('active', snapshot('paused')), true);

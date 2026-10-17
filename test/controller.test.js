@@ -209,3 +209,49 @@ test('at the credits, states change before the button press, offs before ons', a
   assert.deepEqual(timeline, ['Movie Playing=false', 'In Credits=true', 'Credits Rolling pressed']);
   await controller.stop();
 });
+
+test('Every State through a movie with a mid-credits scene: exactly one sensor on at each moment', async () => {
+  const markers = [
+    { type: 'credits', startMs: 100_000, endMs: 160_000, final: false },
+    { type: 'credits', startMs: 220_000, endMs: 400_000, final: true },
+  ];
+  const clock = new FakeClock();
+  const stream = new FakeStream();
+  const states = ['playing', 'paused', 'credits', 'idle'];
+  const config = parseConfig({
+    servers: [{ id: 'server-1', name: 'Plex', url: 'http://plex' }],
+    sensors: states.map((state) => ({ id: state, name: state, type: 'occupancy', state })),
+  }, silentLog);
+  const sensors = config.sensors.map((sensor) => new FakeSensor(sensor));
+  const controller = new Controller({
+    config, server: config.servers[0], log: silentLog, clock, stream, webhooks: new FakeWebhooks(),
+    plex: { playing: async () => [], session: async () => session() },
+    getMarkers: async () => markers, sensors,
+  });
+  const on = () => sensors.filter((s) => s.active).map((s) => s.config.state).join('+');
+  const seen = [];
+  const at = async (ms) => { await clock.advanceTo(start + ms); seen.push(on()); };
+  const start = clock.now();
+  await controller.start();
+  stream.connect();
+  await settle(); await settle();
+  seen.push(on()); // before playing
+  stream.emit('playing', notify('playing', 90_000));
+  await settle();
+  await at(5_000); // 95 s: playing
+  await at(15_000); // 105 s: first credits
+  stream.emit('playing', notify('paused', 110_000)); // pause during the credits
+  await at(25_000);
+  stream.emit('playing', notify('playing', 110_000));
+  await at(30_000); // 115 s: still credits
+  await at(80_000); // 165 s: mid-credits scene
+  stream.emit('playing', notify('paused', 170_000)); // pause during the scene
+  await at(90_000);
+  stream.emit('playing', notify('playing', 170_000));
+  await at(95_000); // 175 s: scene
+  await at(146_000); // 226 s: final credits
+  stream.emit('playing', notify('stopped', 240_000));
+  await at(160_000); // after the stop hold
+  assert.deepEqual(seen, ['idle', 'playing', 'credits', 'credits', 'credits', 'playing', 'paused', 'playing', 'credits', 'idle']);
+  await controller.stop();
+});

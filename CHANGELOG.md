@@ -34,6 +34,8 @@ Initial development.
 - Mid-credits scenes: credits follow every credits marker by default, so a scene between them dims the lights again.
   Advanced can instead start the credits at the first or the final marker.
 - "Nothing playing" sensor condition.
+- "Paused" now means paused outside the credits; a pause during the credits stays "In the credits". With Every State
+  exactly one of the four sensors is on at any moment, including through a mid-credits scene.
 - Sensors keep their state across Homebridge restarts until Plex has been read, so lights don't jump on restart.
 - State changes are published before button presses, offs before ons, so automations never see two states at once.
 - Credits fall back to 95% of the runtime for movies and episodes without a marker, with or without Plex Pass.

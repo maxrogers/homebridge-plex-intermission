@@ -156,6 +156,9 @@ All three use state sensors only (see the lab results below).
 | 2. Credits-Aware (recommended) | Media Playing (playing, before credits) | Also off during the credits, on again for a mid-credits scene |
 | 3. Every State | Media Playing, Media Paused, Credits Rolling, Nothing Playing | Exactly one on at a time; each state gets its own automation |
 
+"Paused" means paused outside the credits, so a pause during the credits keeps Credits Rolling on and exactly one sensor
+is on at any moment. `tools/reliability-lab/scene.mjs` checks this end to end through HAP.
+
 Mid-credits scenes come from Plex's credits markers: a movie with a scene has two credits markers with a gap between
 them. By default credits follow every marker, so the gap counts as playing. Advanced can instead run the credits from
 the first marker or from the final one. Rewinds within the re-arm distance never change the credits state, so the
