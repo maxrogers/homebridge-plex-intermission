@@ -98,6 +98,7 @@ export const PRESETS = [
   {
     id: 'simple',
     name: 'Simple',
+    creditsAware: false,
     tagline: 'One sensor. Lights down while playing.',
     about: 'On while anything plays, including the credits. Off when you pause or stop. One automation each way.',
     sensors: [
@@ -107,6 +108,7 @@ export const PRESETS = [
   {
     id: 'credits',
     name: 'Credits-Aware',
+    creditsAware: true,
     tagline: 'One sensor. Lights up for the credits too.',
     recommended: true,
     about: 'Like Simple, but the sensor also turns off when the credits start, back on for a mid-credits scene, and off again for the rest.',
@@ -117,7 +119,8 @@ export const PRESETS = [
   {
     id: 'states',
     name: 'Every State',
-    tagline: 'Four sensors. Different lighting for pause, credits and stop.',
+    creditsAware: true,
+    tagline: 'Four sensors. Credits-Aware, with different lighting for pause, credits and the end.',
     about: 'One sensor per state, exactly one on at a time, so each moment can have its own scene or fade speed.',
     sensors: [
       { name: 'Media Playing', type: 'occupancy', state: 'playing', why: 'On while playing, except during the credits. Dim the lights.' },

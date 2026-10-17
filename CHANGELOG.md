@@ -38,6 +38,9 @@ Initial development.
   settings page shows a notice until dismissed; webhooks start on their own when Plex Pass returns.
 - Advanced has separate, confirmed "Reset advanced settings" and "Reset Intermission" (signs out, removes the webhook,
   sensors and settings, then setup starts again).
+- "Recipes & Notes" is now "Guide", with a section per suggested setup and ideas for Every State.
+- "Mid-credits scenes" is now "Credits behavior", noting it only affects credits-aware sensors.
+- A library added later (including Other Videos) is recognised the first time something plays from it.
 - Media types are no longer a sensor option: each library's type decides. Movies and TV get credits handling; Music,
   Photos and Other Videos follow play, pause and stop only.
 - "Paused" now means paused outside the credits; a pause during the credits stays "In the credits". With Every State

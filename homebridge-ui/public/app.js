@@ -334,7 +334,7 @@ function signin() {
   }
   return `<div class="im-hero"><img src="icon.svg" alt=""><h4 class="mt-2">Intermission for Plex</h4>${expired}${body}</div>
     ${notices()}
-    <p class="text-center im-muted small">Your Plex sign-in is stored only on this Homebridge, readable by Homebridge alone.</p>`;
+    <p class="text-center im-muted small">Your Plex sign-in stays on this Homebridge, readable only by Homebridge.</p>`;
 }
 
 function stepHeader(number, title) {
@@ -377,7 +377,7 @@ function choose() {
     ${section('Players', 'The players in the room with the lights. Most used first. Choose at least one, or All players.',
       `<div class="im-grid">${players || '<p class="im-muted">No players found yet. Play something on the TV, then Refresh.</p>'}</div>`)}
     ${section('People', 'Whose playback should change the lights.', peoplePicker(sel))}
-    ${section('Libraries', 'Movies and TV Shows are chosen for you. Credits only apply to movies and TV episodes; other libraries still dim and restore the lights.', libraryPicker(sel))}
+    ${section('Libraries', 'Movies and TV Shows are chosen for you. They get credits handling; other libraries just follow play, pause and stop.', libraryPicker(sel))}
     <div class="d-flex gap-2">
       <button class="btn btn-im" data-action="to-template" ${(sel.allUsers === false && sel.users.length === 0) || (!sel.allPlayers && sel.players.length === 0) || (!sel.allLibraries && sel.libraries.length === 0) ? 'disabled' : ''}>Next</button>
       <button class="btn btn-outline-secondary" data-action="refresh-choose">Refresh</button>
@@ -426,7 +426,8 @@ function template() {
       <br><span class="im-muted">${escape(sensor.why)}</span></span></li>`).join('');
     return `<button class="im-card im-template" data-action="pick-template" data-id="${preset.id}" ${pressed(state.template === preset.id)}>
       <span class="im-step">Option ${index + 1}</span>
-      <div><strong>${escape(preset.name)}</strong>${preset.recommended ? ' <span class="im-badge on ms-1">Recommended</span>' : ''}
+      <div><strong>${escape(preset.name)}</strong>
+        <span class="im-badge ms-1">${preset.creditsAware ? 'Credits-Aware' : 'No credits handling'}</span>${preset.recommended ? ' <span class="im-badge on">Recommended</span>' : ''}
         <span class="im-muted"> · ${escape(preset.tagline)}</span></div>
       <p class="im-muted mb-2 mt-1">${escape(preset.about)}</p>
       <ul class="im-preset">${items}</ul>
@@ -443,7 +444,7 @@ function template() {
 }
 
 function main() {
-  const tabs = { sensors: 'Sensors', recipes: 'Recipes & Notes', advanced: 'Advanced' };
+  const tabs = { sensors: 'Sensors', recipes: 'Guide', advanced: 'Advanced' };
   const nav = Object.entries(tabs).map(([id, label]) => `<button class="im-tab" role="tab" aria-selected="${state.tab === id}" data-action="tab" data-id="${id}">${label}</button>`).join('');
   const content = { sensors: sensorsTab, recipes: recipesTab, advanced: advancedTab }[state.tab]();
   const pass = state.status.plexPass === undefined ? ''
@@ -467,11 +468,16 @@ function plexPassChangeBanner() {
     return '';
   }
   const when = new Date(change.changedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const hook = state.webhook;
+  const ready = hook && !hook.error && hook.registered && hook.disabledOn.length === 0 && hook.portState !== 'other';
   return change.active
     ? `<div class="im-card im-banner mb-3"><strong>Plex Pass detected (${escape(when)}).</strong>
-        Add the Intermission webhook for instant play detection and the Plex Pass events. New media will get credits markers again.
-        <div class="d-flex gap-2 mt-2"><button class="btn btn-sm btn-im" data-action="open-webhooks">Set up webhooks</button>
-        <button class="btn btn-sm btn-outline-secondary" data-action="ack-plexpass">Dismiss</button></div></div>`
+        ${!hook ? 'Checking your webhooks…'
+          : ready ? 'Your Intermission webhook is already set up, so instant play detection and the Plex Pass events are back. New media gets credits markers again.'
+          : hook.registered ? 'Your Intermission webhook is registered, but something needs attention before Plex can use it.'
+          : 'Add the Intermission webhook for instant play detection and the Plex Pass events. New media gets credits markers again.'}
+        <div class="d-flex gap-2 mt-2">${ready ? '' : '<button class="btn btn-sm btn-im" data-action="open-webhooks">Set up webhooks</button>'}
+        <button class="btn btn-sm btn-outline-secondary" data-action="ack-plexpass">${ready ? 'OK' : 'Dismiss'}</button></div></div>`
     : `<div class="im-card im-banner mb-3"><strong>Plex Pass ended (detected ${escape(when)}).</strong>
         Intermission switched to basic playback detection on its own; your sensors keep working.
         <div class="mt-2">${noPlexPassSummary()}</div>
@@ -541,7 +547,7 @@ function editor(sensor, sel) {
   return `<div class="im-editor" data-sensor="${escape(sensor.id)}">
     <label class="im-label" for="im-name">Name in Apple Home</label>
     <input id="im-name" class="form-control" data-field="name" value="${escape(sensor.name)}" maxlength="64">
-    <label class="im-label">Type <span>(not sure? keep Occupancy for states, Button for moments)</span></label>
+    <label class="im-label">Type <span>(not sure? choose Occupancy sensor)</span></label>
     <div class="im-options im-types">${types}</div>
     ${isState
       ? `<label class="im-label" for="im-state">On while</label><select id="im-state" class="form-select" data-field="state">${conditions}</select>`
@@ -615,7 +621,7 @@ function webhookPanel() {
   }
   const settings = hook.serverSettings.map((srv) => `<div class="im-status ${srv.enabled === false ? 'warn' : srv.enabled ? 'ok' : ''}"><span class="im-dot"></span><div>
       <strong>${escape(srv.name)}: Webhooks setting ${srv.enabled === undefined ? 'unknown' : srv.enabled ? 'on' : 'off'}</strong>
-      <small>${srv.enabled === false ? 'Plex sends no webhooks while this is off. It is turned on when you add the Intermission webhook.' : srv.enabled ? 'In Plex: Settings, Network, Webhooks.' : 'Only the server owner can read this setting.'}</small>
+      <small>${srv.enabled === false ? 'Plex sends no webhooks while this is off. It is turned on when you add the Intermission webhook.' : srv.enabled ? 'In Plex: Settings, Network, Webhooks.' : 'Unknown: only the server\'s owner can see this setting.'}</small>
     </div></div>`).join('');
   const port = `<div class="im-status ${hook.portState === 'other' ? 'bad' : hook.portState === 'intermission' ? 'ok' : ''}"><span class="im-dot"></span><div>
       <strong>Webhook port ${hook.port}</strong><small>${PORT_TEXT[hook.portState]?.(hook.port) ?? ''}</small>
@@ -658,37 +664,54 @@ function webhooks() {
 }
 
 function recipesTab() {
-  const sensorRecipe = (title, sensor, body) => `<div class="im-card"><h6>${title}</h6><ol>
-      <li>In the Home app, tap <strong>+</strong>, then <strong>Add Automation</strong>, then <strong>A Sensor Detects Something</strong>.</li>
-      <li>Choose <strong>${sensor}</strong>, then <strong>Detects Occupancy</strong>.</li>${body}</ol></div>`;
+  const step = (html) => `<li>${html}</li>`;
+  const automation = (sensor, when = 'Detects Occupancy') =>
+    step(`In the Home app, tap <strong>+</strong>, <strong>Add Automation</strong>, <strong>A Sensor Detects Something</strong>, then <strong>${sensor}</strong> and <strong>${when}</strong>.`);
+  const fade = (sensor, stopWhen) => `<div class="im-card"><h6>A slow fade instead of a jump</h6>
+      <p class="small im-muted mb-2">Apple Home has no fade time, so a fade is a short shortcut that steps the lights.</p><ol>
+      ${step('In the automation, choose any light, scroll down and tap <strong>Convert To Shortcut</strong>.')}
+      ${step(`Replace the steps with <strong>Repeat 10 times</strong>: <strong>Get the state of ${sensor}</strong>; <strong>If</strong> it is ${stopWhen}, <strong>Stop This Shortcut</strong>; raise brightness by 10%; <strong>Wait 6 seconds</strong>.`)}
+      ${step('That takes about a minute, and stops at once if playback comes back.')}</ol></div>`;
+  const preset = state.config.preset;
+  const mark = (id) => (preset === id ? ' <span class="im-badge on">Your setup</span>' : '');
   return `<div class="im-recipe">
-    <p class="im-muted">Intermission makes the sensors; Apple Home turns them into light changes.</p>
-    <h6 class="mt-3">Simple and Credits-Aware (one sensor)</h6>
-    ${sensorRecipe('Lights down when something plays', 'Media Playing', '<li>Choose your lights and set them dim, or pick a scene.</li>')}
-    <div class="im-card"><h6>Lights up when it stops playing</h6><ol>
-      <li>Add an automation: <strong>A Sensor Detects Something</strong>, <strong>Media Playing</strong>, <strong>Stops Detecting</strong>.</li>
-      <li>Set your normal lighting. With Credits-Aware this also runs at the credits, and the first automation dims again for a mid-credits scene.</li>
-      <li>For a gentle fade instead, use the fade shortcut below with <strong>Media Playing</strong>: stop the shortcut if it is detected.</li></ol></div>
-    <h6 class="mt-4">Every State (four sensors)</h6>
-    <p class="im-muted small">Exactly one of the four is on at a time, so each gets one automation.</p>
-    ${sensorRecipe('Lights down when something plays', 'Media Playing', '<li>Choose your lights and set them dim, or pick a scene.</li>')}
-    ${sensorRecipe('Lights up a little on pause', 'Media Paused', '<li>Set the lights to a comfortable level.</li>')}
-    <div class="im-card"><h6>Slow fade up at the credits</h6>
-      <p class="small im-muted mb-2">Apple Home has no fade-time setting, so the fade is a short shortcut that steps the lights up.</p><ol>
-      <li>Add an automation: <strong>A Sensor Detects Something</strong>, <strong>Credits Rolling</strong>, <strong>Detects Occupancy</strong>. Choose any light, then scroll down and tap <strong>Convert To Shortcut</strong>.</li>
-      <li>Replace the steps with <strong>Repeat 10 times</strong>, containing: <strong>Get the state of Credits Rolling</strong>; <strong>If</strong> it is not detected, <strong>Stop This Shortcut</strong>; set the lights' brightness up by 10%; <strong>Wait 6 seconds</strong>.</li>
-      <li>That brings the lights up over a minute, and stops the moment you rewind, pause or stop.</li></ol></div>
-    ${sensorRecipe('Lights back to normal when it ends', 'Nothing Playing', '<li>Set your normal lighting.</li>')}
-    <h6 class="mt-4">Notes</h6>
+    <p class="im-muted">Intermission makes the sensors; you make the light changes in the Home app. Use the section for your setup.</p>
+
+    <h5 class="mt-3">1. Simple${mark('simple')}</h5>
+    <p class="small">Best for rooms where the lights just go down while anything plays and come back for everything else, including music.</p>
+    <div class="im-card"><h6>Two automations</h6><ol>
+      ${automation('Media Playing')}${step('Choose your lights and set them dim, or pick a scene.')}
+      ${automation('Media Playing', 'Stops Detecting')}${step('Set your normal lighting.')}</ol></div>
+
+    <h5 class="mt-4">2. Credits-Aware${mark('credits')}</h5>
+    <p class="small">Best for most living rooms and theaters. The same two automations as Simple; the lights also come up when the credits start and go down again for a mid-credits scene.</p>
+    ${fade('Media Playing', 'detected')}
+
+    <h5 class="mt-4">3. Every State${mark('states')}</h5>
+    <p class="small">Best when pause, credits and the end should each look different. Exactly one of the four sensors is on at a time, so each gets one "Detects Occupancy" automation:</p>
+    <div class="im-card"><ol>
+      ${step('<strong>Media Playing</strong>: lights down.')}
+      ${step('<strong>Media Paused</strong>: a little light, for example just the lamp by the door.')}
+      ${step('<strong>Credits Rolling</strong>: a slow fade up (see below). A mid-credits scene switches back to Media Playing on its own.')}
+      ${step('<strong>Nothing Playing</strong>: normal lighting.')}</ol></div>
+    ${fade('Credits Rolling', 'not detected')}
+    <div class="im-card"><h6>Ideas for Every State</h6><ul class="small mb-0">
+      <li>Add a condition such as <strong>only after sunset</strong> so daytime watching leaves the lights alone.</li>
+      <li>On <strong>Media Paused</strong>, light the path to the kitchen instead of the whole room.</li>
+      <li>Use color: a warm scene for the credits, a dim blue for pause.</li>
+      <li>Go beyond lights: close the shades on Media Playing, open them on Nothing Playing, or switch a fan or soundbar.</li>
+      <li>One sensor per room: give each sensor its own player (Edit, Players), for example "Bedroom Playing".</li>
+    </ul></div>
+
+    <h5 class="mt-4">Good to know</h5>
     <ul class="small">
-      <li><strong>Why sensors, not buttons?</strong> A sensor is a state Home can read at any time. If Home misses a change (a hub restart, Wi-Fi drop or Homebridge restart), it sees the right state as soon as it reconnects, and a fade can check whether playback came back. A button press Home misses is simply gone. Buttons are still available for one-off actions.</li>
-      <li>Short pauses (under 2 seconds), skips and quick pause-play-pause bursts don't change any sensor, so lights never stutter. Adjust this in Advanced.</li>
-      <li>Mid-credits scenes count as playing by default: the lights dim again for the scene and come back up for the rest of the credits. Change it in Advanced.</li>
-      <li>Music, photos and other videos have no credits. Their sensors go from Playing to Paused or Nothing Playing.</li>
-      <li>Rewinding out of the credits turns Credits Rolling off and Media Playing back on.</li>
+      <li><strong>Why sensors, not buttons?</strong> Home can always read a sensor. If it misses a change (hub restart, Wi-Fi drop, Homebridge restart), it sees the right state when it reconnects. A missed button press is simply gone. Buttons are still available for one-off actions.</li>
+      <li>Pauses under 2 seconds, skips and quick pause-play bursts don't change any sensor, so lights never stutter.</li>
+      <li>Movies and TV Shows get credits handling. Music, Photos and Other Videos just follow play, pause and stop.</li>
+      <li>A pause during the credits keeps Credits Rolling on, so a fade isn't interrupted.</li>
       <li>Autoplaying the next episode isn't a stop.</li>
       <li>After a Homebridge restart, sensors keep their last state until Plex has been read, so lights don't jump.</li>
-      <li>Renaming a sensor here keeps the automations that use it. Removing it removes it from Apple Home.</li>
+      <li>Renaming a sensor keeps the automations that use it. Removing one removes it from Apple Home.</li>
     </ul></div>`;
 }
 
@@ -705,11 +728,11 @@ function advancedTab() {
   return `<div class="im-card im-banner mb-3">These rarely need changing. The defaults suit most setups.</div>
     <div class="im-card">
       <div class="im-field">
-        <label for="im-first"><strong>Mid-credits scenes</strong><small>Some movies have a scene between two parts of the credits. Intermission can treat it as playing (lights dim again), or ignore it.</small></label>
+        <label for="im-first"><strong>Credits behavior</strong><small>How a mid-credits scene is handled. Only affects Credits-Aware and Every State sensors (anything using "Playing, before the credits" or "In the credits").</small></label>
         <select id="im-first" class="form-select form-select-sm" data-credits-mode>
-          <option value="scenes" ${(timing.midCredits ?? (timing.firstCreditsMarker === false ? 'final' : 'scenes')) === 'scenes' ? 'selected' : ''}>Dim for the scene (recommended)</option>
-          <option value="first" ${(timing.midCredits ?? (timing.firstCreditsMarker === false ? 'final' : 'scenes')) === 'first' ? 'selected' : ''}>Lights up from the first credits</option>
-          <option value="final" ${(timing.midCredits ?? (timing.firstCreditsMarker === false ? 'final' : 'scenes')) === 'final' ? 'selected' : ''}>Lights down until the final credits</option></select>
+          <option value="scenes" ${(timing.midCredits ?? (timing.firstCreditsMarker === false ? 'final' : 'scenes')) === 'scenes' ? 'selected' : ''}>Dim again for mid-credits scenes (recommended)</option>
+          <option value="first" ${(timing.midCredits ?? (timing.firstCreditsMarker === false ? 'final' : 'scenes')) === 'first' ? 'selected' : ''}>Ignore scenes: credits from the first credits</option>
+          <option value="final" ${(timing.midCredits ?? (timing.firstCreditsMarker === false ? 'final' : 'scenes')) === 'final' ? 'selected' : ''}>Ignore scenes: credits from the final credits only</option></select>
       </div>
       <div class="im-field">
         <label for="im-fallback"><strong>When a movie or episode has no credits marker</strong><small>With Plex Pass, Plex adds markers when it analyses new media; without it, only items that already have markers do. Otherwise use a share of the runtime. Movies and TV only.</small></label>

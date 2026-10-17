@@ -26,7 +26,7 @@ export interface EngineDependencies {
    * Whether an item can have credits. Defaults to movies and episodes; the platform also excludes
    * "Other Videos" libraries, whose items are movies to Plex but have no credits.
    */
-  hasCredits?(media: SessionInfo['media']): boolean;
+  hasCredits?(media: SessionInfo['media']): boolean | Promise<boolean>;
 }
 
 interface PlayerRecord {
@@ -243,21 +243,22 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
       player.activity = 'paused';
     }
 
-    this.deps.getMarkers(session.media.ratingKey).then(
-      (markers) => this.applyMarkers(player, generation, markers),
+    const credited = Promise.resolve(this.deps.hasCredits?.(session.media) ?? CREDITED_TYPES.has(session.media.type))
+      .catch(() => CREDITED_TYPES.has(session.media.type));
+    Promise.all([this.deps.getMarkers(session.media.ratingKey), credited]).then(
+      ([markers, hasCredits]) => this.applyMarkers(player, generation, markers, hasCredits),
       (error: unknown) => {
         this.deps.log.warn('Could not read credits markers for "%s": %s', session.media.title, describe(error));
-        this.applyMarkers(player, generation, []);
+        void credited.then((hasCredits) => this.applyMarkers(player, generation, [], hasCredits));
       },
     );
   }
 
-  private applyMarkers(player: PlayerRecord, generation: number, markers: readonly Marker[]): void {
+  private applyMarkers(player: PlayerRecord, generation: number, markers: readonly Marker[], credited: boolean): void {
     if (generation !== player.generation) {
       return;
     }
     const media = player.session?.media;
-    const credited = media ? (this.deps.hasCredits?.(media) ?? CREDITED_TYPES.has(media.type)) : false;
     player.credits = credited ? creditsRanges(markers, media?.durationMs, this.settings, media?.type) : [];
     this.deps.log.debug('%s: credits %s', label(player), player.credits.length === 0
       ? 'none'

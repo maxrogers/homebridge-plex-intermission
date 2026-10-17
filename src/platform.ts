@@ -6,8 +6,7 @@ import { parseConfig, type IntermissionConfig } from './config.js';
 import { Controller, type SensorOutput } from './controller.js';
 import { systemClock } from './engine/clock.js';
 import type { Logger } from './engine/types.js';
-import { CREDITED_TYPES } from './engine/credits.js';
-import { libraryKind } from './plex/discovery.js';
+import { LibraryTypes } from './plex/library-types.js';
 import { MarkerCache } from './plex/marker-cache.js';
 import { NotificationStream } from './plex/notifications.js';
 import { PlexTv } from './plex/plex-tv.js';
@@ -109,25 +108,10 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
       await this.startWebhooks(state.webhookSecret, feed);
     }
 
-    // "Other Videos" libraries hold movies to Plex, but they have no credits.
-    const personal = new Set<string>();
-    const hasCredits = (serverId: string) => (media: { type: string; librarySectionId?: string }) =>
-      CREDITED_TYPES.has(media.type) && !personal.has(`${serverId}/${media.librarySectionId}`);
-
     const plexServers = servers.map((server) => new PlexServer({ baseUrl: server.url, token: serverToken(credentials, server.id), clientIdentifier: state.clientIdentifier }));
-    const readLibraries = async () => {
-      await Promise.all(servers.map(async (server, index) => {
-        const libraries = await plexServers[index]!.libraries().catch(() => undefined);
-        for (const library of libraries ?? []) {
-          const key = `${server.id}/${library.id}`;
-          if (libraryKind(library) === 'other') {
-            personal.add(key);
-          } else {
-            personal.delete(key);
-          }
-        }
-      }));
-    };
+    const libraryTypes = new LibraryTypes(servers.map((server, index) => ({ serverId: server.id, libraries: () => plexServers[index]!.libraries() })));
+    const hasCredits = (serverId: string) => (media: { type: string; librarySectionId?: string }) => libraryTypes.hasCredits(serverId, media);
+    const readLibraries = () => libraryTypes.refresh();
     await readLibraries();
 
     servers.forEach((server, index) => {

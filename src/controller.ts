@@ -47,7 +47,7 @@ export interface ControllerOptions {
   webhooks?: WebhookApi;
   getMarkers(ratingKey: string): Promise<readonly Marker[]>;
   /** Whether an item can have credits; see EngineDependencies.hasCredits. */
-  hasCredits?(media: SessionInfo['media']): boolean;
+  hasCredits?(media: SessionInfo['media']): boolean | Promise<boolean>;
   sensors: readonly SensorOutput[];
   /** Called once when Plex rejects the saved sign-in. */
   onUnauthorized?(): void;

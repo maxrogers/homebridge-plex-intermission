@@ -455,3 +455,37 @@ Both are MIT licensed.
 | Sign-in, several servers, discovery, wizard, board, Recipes, Advanced | Done (tap to edit, drag to reorder) |
 | Webhook "Add for me" with review, "About this setup" report | Done |
 | Plex Pass change banners, Live tab, debug log export, Intermission switch | Next |
+
+## Planned: media conditions (projectors and more)
+
+Not built yet. Design notes, so it can be added without touching the simple setups.
+
+### How homebridge-plex-metadata does it
+
+It polls `/status/sessions` every 30 s (plus optional webhooks) and publishes the playing item's aspect ratio
+(from the encoded `width`/`height`), resolution, video codec, audio codec and status as **custom string
+characteristics** on a custom service. Apple's Home app does not show custom characteristics and cannot use them in
+automations; only third-party apps (Eve, Controller for HomeKit, Home+) can. The encoded frame is also not the picture
+shape: most 2.39:1 Blu-ray and UHD files are letterboxed 16:9, so they report 1.78.
+
+### How Intermission would do it
+
+Keep Apple Home only: no custom characteristics. A media condition is just another sensor filter, so a projector user
+makes a sensor such as "Scope Movie Playing" (Playing, before the credits; picture: wide) and triggers the projector's
+lens memory from Home through the projector's own plugin. Nothing changes for anyone who doesn't open it.
+
+- **Where the data comes from:** the session read Intermission already does when an item starts (`/status/sessions`:
+  `Media` and its video and audio `Stream`s), plus the item's labels. With webhooks, that read is added only when a
+  sensor uses a media condition. No polling.
+- **Conditions** (all optional, under a collapsed "More conditions" in the sensor editor):
+  - Picture shape: standard (up to 1.9:1) or wide (2.0:1 and wider), from the stream, or from a Plex **label** the user
+    adds (for example "Scope"), which is the reliable option for letterboxed files.
+  - Resolution: SD, 720p, 1080p, 4K.
+  - HDR: SDR, HDR10/HLG, Dolby Vision (from the video stream's color transfer and Dolby Vision flags).
+  - Audio: Dolby Atmos or DTS:X, surround, stereo.
+  - Plex labels and content rating (for example "Kids" or G/PG), for family or theme lighting.
+- **Visibility:** a "Now playing" readout (Live tab) shows exactly what Plex reports for the current item, because
+  stream data varies by file.
+- **Other triggers worth considering:** intro markers ("Intro playing", Plex Pass), time left ("Last 10 minutes" as a
+  state), Live TV versus library, and direct play versus transcode for troubleshooting. Each would be a sensor
+  condition, not a new concept.

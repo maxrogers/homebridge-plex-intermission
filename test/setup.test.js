@@ -218,3 +218,18 @@ test('discovery merges servers, ranks players, lists Home users and groups libra
   assert.deepEqual(result.servers[1].libraries, []);
   assert.match(result.servers[1].error, /401/);
 });
+
+test('library types: Other Videos never get credits, and a new library is read at once', async () => {
+  const { LibraryTypes } = await import('../dist/plex/library-types.js');
+  let libraries = [{ id: '1', title: 'Movies', type: 'movie', agent: 'tv.plex.agents.movie' }];
+  let reads = 0;
+  const types = new LibraryTypes([{ serverId: 'a', libraries: async () => { reads++; return libraries; } }]);
+  await types.refresh();
+  assert.equal(await types.hasCredits('a', { type: 'movie', librarySectionId: '1' }), true);
+  assert.equal(await types.hasCredits('a', { type: 'track', librarySectionId: '1' }), false);
+  libraries = [...libraries, { id: '7', title: 'Home Videos', type: 'movie', agent: 'tv.plex.agents.none' }, { id: '8', title: 'More Movies', type: 'movie' }];
+  assert.equal(await types.hasCredits('a', { type: 'movie', librarySectionId: '7' }), false, 'new Other Videos library');
+  assert.equal(reads, 2, 'read again because library 7 was new');
+  assert.equal(await types.hasCredits('a', { type: 'movie', librarySectionId: '8' }), true, 'new movie library');
+  assert.equal(reads, 2, 'already known from the same read');
+});
