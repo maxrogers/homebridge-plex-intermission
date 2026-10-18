@@ -1,3 +1,4 @@
+import type { NamedCommand } from './commands.js';
 import { DEFAULT_ENGINE_SETTINGS, type EngineEventType, type EngineSettings, type Logger } from './engine/types.js';
 
 /** Webhook events that only arrive through Plex webhooks (Plex Pass). */
@@ -12,13 +13,21 @@ export const WEBHOOK_EVENTS = [
   'admin.database.corrupted',
 ] as const;
 
-export const ENGINE_EVENTS: readonly EngineEventType[] = ['play', 'pause', 'resume', 'stop', 'seek', 'credits.start', 'credits.cancel'];
+export const ENGINE_EVENTS: readonly EngineEventType[] = ['play', 'pause', 'resume', 'stop', 'seek', 'credits.start', 'credits.cancel', 'intro.start', 'intro.end'];
 
 export type WebhookOnlyEvent = (typeof WEBHOOK_EVENTS)[number];
 export type TriggerEvent = EngineEventType | WebhookOnlyEvent;
 
-export const STATE_CONDITIONS = ['playing', 'playing-any', 'paused', 'credits', 'active', 'idle'] as const;
+/**
+ * What a state sensor follows. Playing, Paused and Playing or paused can leave out the credits
+ * and/or the intro (`except`); In the credits and In the intro are those moments themselves.
+ */
+export const STATE_CONDITIONS = ['playing', 'paused', 'active', 'credits', 'intro', 'idle'] as const;
 export type StateCondition = (typeof STATE_CONDITIONS)[number];
+
+/** Moments a Playing, Paused or Playing or paused sensor can leave out. */
+export const EXCEPTIONS = ['credits', 'intro'] as const;
+export type Exception = (typeof EXCEPTIONS)[number];
 
 export const SENSOR_TYPES = ['occupancy', 'motion', 'contact', 'button'] as const;
 export type SensorType = (typeof SENSOR_TYPES)[number];
@@ -36,6 +45,10 @@ export interface SensorConfig {
   type: SensorType;
   /** For occupancy, motion and contact sensors. */
   state?: StateCondition;
+  /** Moments the sensor turns off for (Playing, Paused, Playing or paused only). */
+  except: Exception[];
+  /** Command ids to run when a state sensor turns on or off, or a button is pressed. */
+  run: { on: string[]; off: string[]; press: string[] };
   /** For buttons. */
   events: TriggerEvent[];
   filters: SensorFilters;
@@ -66,6 +79,8 @@ export interface IntermissionConfig {
   /** How often to re-read sessions while the notification stream is down and something plays. 0 disables. */
   safetyResyncMs: number;
   detailedLogging: boolean;
+  /** Named commands; empty when the feature is off. */
+  commands: NamedCommand[];
 }
 
 export const DEFAULT_WEBHOOK_PORT = 32550;
@@ -130,7 +145,22 @@ export function parseConfig(raw: unknown, log: Logger): IntermissionConfig {
     engine,
     safetyResyncMs,
     detailedLogging: config.detailedLogging === true,
+    commands: parseCommands(config.commands),
   };
+}
+
+function parseCommands(value: unknown): NamedCommand[] {
+  const section = asRecord(value);
+  if (section.enabled !== true || !Array.isArray(section.list)) {
+    return [];
+  }
+  return section.list.flatMap((entry) => {
+    const command = asRecord(entry);
+    const id = asString(command.id);
+    const name = asString(command.name);
+    const line = asString(command.command);
+    return id && name && line ? [{ id, name, command: line }] : [];
+  });
 }
 
 function parseServers(value: unknown[]): ServerConfig[] {
@@ -169,6 +199,12 @@ function parseSensors(value: unknown, log: Logger): SensorConfig[] {
       name,
       type,
       events: [],
+      except: [],
+      run: {
+        on: asStrings(asRecord(sensor.run).on),
+        off: asStrings(asRecord(sensor.run).off),
+        press: asStrings(asRecord(sensor.run).press),
+      },
       filters: {
         players: asStrings(filters.players),
         users: asStrings(filters.users),
@@ -182,7 +218,13 @@ function parseSensors(value: unknown, log: Logger): SensorConfig[] {
         log.warn('Sensor "%s" has no events, so it will never trigger.', name);
       }
     } else {
-      parsed.state = STATE_CONDITIONS.find((c) => c === sensor.state) ?? 'playing';
+      // Older configs: "playing-any" was playing including the credits; "playing" and "paused" left the credits out.
+      const raw = sensor.state === 'playing-any' ? 'playing' : sensor.state;
+      parsed.state = STATE_CONDITIONS.find((c) => c === raw) ?? 'playing';
+      const excepted = Array.isArray(sensor.except)
+        ? asStrings(sensor.except).filter((e): e is Exception => (EXCEPTIONS as readonly string[]).includes(e))
+        : (sensor.state === 'playing' || sensor.state === 'paused' ? ['credits' as const] : []);
+      parsed.except = ['playing', 'paused', 'active'].includes(parsed.state) ? [...new Set(excepted)] : [];
     }
     return [parsed];
   });

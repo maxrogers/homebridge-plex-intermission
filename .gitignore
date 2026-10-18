@@ -7,3 +7,5 @@ intermission-probe-*.jsonl
 tools/reliability-lab/node_modules/
 tools/reliability-lab/results-*.json
 tools/reliability-lab/homebridge-*.log
+tools/settings-preview/node_modules/
+tools/settings-preview/shots/

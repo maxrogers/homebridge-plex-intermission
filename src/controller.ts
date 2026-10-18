@@ -30,10 +30,16 @@ export interface StreamApi extends EventEmitter<{
 export type WebhookApi = EventEmitter<{ payload: [unknown] }>;
 
 /** A HomeKit output. */
+/** What was playing when a sensor changed, for commands. */
+export interface ChangeContext {
+  event?: string;
+  session?: SessionInfo;
+}
+
 export interface SensorOutput {
   readonly config: SensorConfig;
-  setActive(active: boolean): void;
-  press(): void;
+  setActive(active: boolean, context?: ChangeContext): void;
+  press(context?: ChangeContext): void;
 }
 
 export interface ControllerOptions {
@@ -181,7 +187,7 @@ export class Controller {
     } else {
       this.becomeReady();
     }
-    this.pressButtons(event.type, contextOf(event.session, undefined, this.options.server.id));
+    this.pressButtons(event.type, contextOf(event.session, undefined, this.options.server.id), event.session);
     if (!this.options.stream.isConnected) {
       this.scheduleResync();
     }
@@ -199,7 +205,7 @@ export class Controller {
     this.options.log.debug('Webhook %s', webhook.event);
     this.engine.handleWebhook(webhook);
     if (WEBHOOK_ONLY.has(webhook.event)) {
-      this.pressButtons(webhook.event as TriggerEvent, this.webhookContext(webhook));
+      this.pressButtons(webhook.event as TriggerEvent, this.webhookContext(webhook), webhook.session);
     }
   }
 
@@ -208,11 +214,11 @@ export class Controller {
     return { ...context, user: context.user ?? webhook.user };
   }
 
-  private pressButtons(event: TriggerEvent, context: MatchContext): void {
+  private pressButtons(event: TriggerEvent, context: MatchContext, session?: SessionInfo): void {
     for (const sensor of this.options.sensors) {
       if (sensor.config.type === 'button' && sensor.config.events.includes(event) && matchesFilters(sensor.config.filters, context)) {
         this.options.log.info('%s: %s', sensor.config.name, event);
-        sensor.press();
+        sensor.press({ event, session });
       }
     }
   }
@@ -223,7 +229,7 @@ export class Controller {
       return;
     }
     const snapshots = this.engine.snapshots();
-    const updates: { sensor: SensorOutput; active: boolean }[] = [];
+    const updates: { sensor: SensorOutput; active: boolean; session?: SessionInfo }[] = [];
     for (const sensor of this.options.sensors) {
       const condition = sensor.config.state;
       if (sensor.config.type === 'button' || !condition) {
@@ -232,16 +238,16 @@ export class Controller {
       const matching = snapshots.filter((snapshot) => snapshot.session !== undefined
         && matchesFilters(sensor.config.filters, contextOf(snapshot.session, undefined, this.options.server.id)));
       // "Nothing playing" is on while no matching player is busy; the rest are on while any player meets them.
+      const holding = matching.find((snapshot) => stateHolds(condition, snapshot, sensor.config.except));
       updates.push({
         sensor,
-        active: condition === 'idle'
-          ? matching.every((snapshot) => stateHolds('idle', snapshot))
-          : matching.some((snapshot) => stateHolds(condition, snapshot)),
+        active: condition === 'idle' ? matching.every((snapshot) => stateHolds('idle', snapshot)) : holding !== undefined,
+        session: (holding ?? matching[0])?.session,
       });
     }
     // Turn states off before turning others on, so nothing ever sees two states at once.
-    for (const { sensor, active } of [...updates.filter((u) => !u.active), ...updates.filter((u) => u.active)]) {
-      sensor.setActive(active);
+    for (const { sensor, active, session } of [...updates.filter((u) => !u.active), ...updates.filter((u) => u.active)]) {
+      sensor.setActive(active, { session });
     }
   }
 

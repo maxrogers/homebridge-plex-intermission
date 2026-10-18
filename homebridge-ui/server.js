@@ -2,6 +2,7 @@ import { networkInterfaces } from 'node:os';
 
 import { HomebridgePluginUiServer, RequestError } from '@homebridge/plugin-ui-utils';
 
+import { CommandRunner } from '../dist/commands.js';
 import { PlexHttpError } from '../dist/plex/server.js';
 import { SetupError, SetupService, webhookOptionsFrom } from '../dist/setup-service.js';
 import { Storage } from '../dist/storage.js';
@@ -15,6 +16,12 @@ class IntermissionUiServer extends HomebridgePluginUiServer {
     this.handle('/status', (body) => service.status(typeof body.setupId === 'string' ? body.setupId : undefined));
     this.handle('/about', () => service.about());
     this.handle('/plexpass/ack', () => service.acknowledgePlexPass());
+    // Runs a command once with sample values, so it can be checked from Settings.
+    const quiet = { debug() {}, info() {}, warn() {}, error() {} };
+    this.handle('/commands/test', (body) => new CommandRunner(quiet, 15_000).run(
+      { id: 'test', name: String(body.name ?? 'Test'), command: String(body.command ?? '') },
+      { sensor: 'Media Playing', state: 'on', title: 'Test Movie', type: 'movie', library: 'Movies', player: 'Living Room', user: 'Test User' },
+    ));
     this.handle('/reset', (body) => service.resetPlugin(webhook(body)));
     this.handle('/signin/start', (body) => service.startSignIn(body.mode === 'code' ? 'code' : 'browser'));
     this.handle('/signin/check', () => service.checkSignIn());

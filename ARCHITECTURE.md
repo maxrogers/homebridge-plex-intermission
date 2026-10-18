@@ -153,7 +153,7 @@ All three use state sensors only (see the lab results below).
 | Option | Sensors | Behaviour |
 |---|---|---|
 | 1. Simple | Media Playing (playing, including credits) | On while anything plays; off on pause and stop |
-| 2. Credits-Aware (recommended) | Media Playing (playing, before credits) | Also off during the credits, on again for a mid-credits scene |
+| 2. Simple + Credits (recommended) | Media Playing (playing, except during the credits) | Also off during the credits, on again for a mid-credits scene |
 | 3. Every State | Media Playing, Media Paused, Credits Rolling, Nothing Playing | Exactly one on at a time; each state gets its own automation |
 
 "Paused" means paused outside the credits, so a pause during the credits keeps Credits Rolling on and exactly one sensor
@@ -375,7 +375,7 @@ server's subnet, or the "Homebridge address for Plex" override in Advanced.
   2. Server, chosen automatically when there is only one.
   3. Health check: Plex Pass, webhook with "Add for me", credits detection with coverage per library.
   4. Choose players, users and libraries.
-  5. A suggested setup (Simple, Credits-Aware or Every State) or "Start from scratch."
+  5. A suggested setup (Simple, Simple + Credits or Every State) or "Start from scratch."
   6. The board.
 - **Tabs:** Sensors (the board), Live, Recipes & Notes, Advanced, Diagnostics.
 - **Header:** account and server, a webhook status dot with the time of the last event, and Refresh.
@@ -489,3 +489,60 @@ lens memory from Home through the projector's own plugin. Nothing changes for an
 - **Other triggers worth considering:** intro markers ("Intro playing", Plex Pass), time left ("Last 10 minutes" as a
   state), Live TV versus library, and direct play versus transcode for troubleshooting. Each would be a sensor
   condition, not a new concept.
+
+## Sensor conditions
+
+A state sensor has one condition and, for Playing, Paused and Playing or paused, optional exceptions:
+
+| Condition | Exceptions | Used by |
+|---|---|---|
+| Playing | none, credits, intro | Simple (none); Simple + Credits and Every State (credits) |
+| Paused | none, credits | Every State (credits, so a pause during the credits stays "In the credits") |
+| Playing or paused | none, credits, intro | |
+| In the credits | | Every State |
+| In the intro | | |
+| Nothing playing | | Every State |
+
+Every preset is just these settings, so anything a preset makes can be built from scratch or turned into anything else
+in the editor. Credits behavior (mid-credits scenes) stays one setting in Settings because Every State relies on all
+its sensors reading the credits the same way; the editor shows its current value next to any sensor it affects.
+Older configs are read with their old meaning: `playing-any` becomes Playing, and `playing` and `paused` without
+`except` leave out the credits.
+
+Intro detection uses Plex's intro markers (found on servers with Plex Pass, mostly for TV episodes), read in the same
+request as the credits markers. Skip Intro is a seek past the marker and ends the intro at once.
+
+## Commands
+
+Off by default. Settings, Advanced, Commands turns them on; each command has a name and a shell line. Sensors then
+show "Run commands when it turns on / off", and buttons "when pressed". Commands run on the Homebridge machine (inside
+the container under Docker) with a 30-second limit, from the plugin itself, so they don't depend on the Home hub.
+`{title}`, `{type}`, `{library}`, `{player}`, `{user}`, `{sensor}`, `{state}` and `{event}` are filled in and shell-quoted,
+so a title can't change the command. Settings has a Test button that runs a command once with sample values.
+
+## Settings tab
+
+- **Your setup:** servers, players, people and libraries, with "Change servers, players and libraries" and sign out.
+- **Credits:** Credits behavior and the no-marker fallback.
+- **Plex Pass and webhooks:** status and webhook list; "Webhook options" (receive, port, address) collapsed.
+- **Advanced** (collapsed): timing, detailed logging, commands.
+- **About this setup.**
+- **Reset** (collapsed): "Reset all settings" and "Reset Intermission".
+
+## Explored, not built
+
+### Live TV
+
+Live TV is not a library section: programs come from the DVR's guide provider, and sessions mark them with
+`live="1"`. It would appear as a "Live TV" entry in each server's library list when the server has a DVR
+(`/livetv/dvrs`), stored as `serverId/live`, not chosen by default. Live programs never get credits (no markers, and
+the percentage fallback would fire on the airing length), so they follow play, pause and stop only.
+
+### Media conditions and a "Now playing" inspector
+
+Media details (picture shape, resolution, HDR, audio, labels, content rating) would be extra conditions under a
+collapsed "More conditions" in the sensor editor, read from the session Intermission already reads when an item
+starts. A "Now playing" panel would show what Plex reports for the current item, with a "+ condition" next to each
+supported field. Showing every raw Plex attribute as a tappable tag was considered and rejected: field names and
+formats vary by Plex version, client and transcode, many values change mid-play, and a condition on an undocumented
+field breaks silently. A curated list keeps conditions stable and explainable.

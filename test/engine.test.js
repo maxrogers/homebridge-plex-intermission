@@ -220,3 +220,17 @@ test('items without credits (music, photos, Other Videos) never get a credits ev
   assert.deepEqual(await run({ sessions: media('movie', '9'), hasCredits: notOtherVideos }), ['play'], 'an Other Videos item does not');
   assert.deepEqual(await run({ sessions: media('movie', '9'), hasCredits: notOtherVideos, markers: [credits(190_000)] }), ['play'], 'not even with a marker');
 });
+
+test('intro: starts and ends with the marker; skipping it ends it at once', async () => {
+  const intro = { type: 'intro', startMs: 30_000, endMs: 90_000, final: false };
+  const { engine, clock, events } = createEngine({ markers: [intro, credits(1_000_000)] });
+  notify(engine, 'playing', 20_000);
+  await settle();
+  await clock.advance(15_000); // 35 s
+  notify(engine, 'playing', 35_000);
+  await clock.advance(5_000);
+  notify(engine, 'playing', 95_000); // Skip Intro
+  await clock.advance(1_000);
+  assert.deepEqual(types(events), ['play', 'intro.start', 'seek', 'intro.end']);
+  assert.equal(engine.snapshot(PLAYER).inIntro, false);
+});

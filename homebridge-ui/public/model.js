@@ -10,13 +10,35 @@ export const SENSOR_TYPES = {
 };
 
 export const CONDITIONS = {
-  playing: 'Playing, before the credits',
-  'playing-any': 'Playing, including the credits',
-  paused: 'Paused, outside the credits',
+  playing: 'Playing',
+  paused: 'Paused',
+  active: 'Playing or paused',
   credits: 'In the credits',
-  active: 'Anything playing or paused',
+  intro: 'In the intro',
   idle: 'Nothing playing',
 };
+
+/** Conditions that can leave out the credits or intro, and what each exception means. */
+export const EXCEPTIONS = {
+  credits: { label: 'the credits', help: 'Turns off when the credits start, and follows Credits behavior in Settings for mid-credits scenes.' },
+  intro: { label: 'the intro', help: 'Turns off while an intro plays (Plex finds intros on servers with Plex Pass).' },
+};
+export const CAN_EXCEPT = ['playing', 'paused', 'active'];
+
+/** How Credits behavior reads, for showing it next to the sensors it affects. */
+export const CREDITS_MODES = {
+  scenes: 'dims again for mid-credits scenes',
+  first: 'credits from the first credits, ignoring scenes',
+  final: 'credits from the final credits only',
+};
+export function creditsMode(timing = {}) {
+  return timing.midCredits ?? (timing.firstCreditsMarker === false ? 'final' : 'scenes');
+}
+
+/** Whether a sensor's behavior depends on Credits behavior. */
+export function usesCredits(sensor) {
+  return sensor.state === 'credits' || (CAN_EXCEPT.includes(sensor.state) && (sensor.except ?? []).includes('credits'));
+}
 
 /** `plexPass: true` marks events that only arrive through Plex webhooks. */
 export const EVENTS = {
@@ -26,7 +48,9 @@ export const EVENTS = {
   stop: { label: 'Stopped', phrase: 'playback stops' },
   seek: { label: 'Skipped or rewound', phrase: 'someone skips or rewinds' },
   'credits.start': { label: 'Credits start', phrase: 'the credits start' },
-  'credits.cancel': { label: 'Rewound out of the credits', phrase: 'someone rewinds out of the credits' },
+  'credits.cancel': { label: 'Credits stop (rewind or mid-credits scene)', phrase: 'the credits stop for a rewind or a mid-credits scene' },
+  'intro.start': { label: 'Intro starts', phrase: 'an intro starts' },
+  'intro.end': { label: 'Intro ends or is skipped', phrase: 'an intro ends or is skipped' },
   'media.scrobble': { label: 'Marked as watched', phrase: 'an item is marked as watched', plexPass: true },
   'media.rate': { label: 'Rated', phrase: 'an item is rated', plexPass: true },
   'library.new': { label: 'Added to a library', phrase: 'an item is added', plexPass: true },
@@ -76,7 +100,7 @@ const emptyFilters = () => ({ players: [], users: [], libraries: [], mediaTypes:
 
 export function newSensor(type = 'occupancy') {
   return SENSOR_TYPES[type].state
-    ? { id: sensorId(), name: 'New sensor', type, state: 'playing', filters: emptyFilters() }
+    ? { id: sensorId(), name: 'New sensor', type, state: 'playing', except: ['credits'], filters: emptyFilters() }
     : { id: sensorId(), name: 'New button', type, events: ['play'], filters: emptyFilters() };
 }
 
@@ -102,29 +126,29 @@ export const PRESETS = [
     tagline: 'One sensor. Lights down while playing.',
     about: 'On while anything plays, including the credits. Off when you pause or stop. One automation each way.',
     sensors: [
-      { name: 'Media Playing', type: 'occupancy', state: 'playing-any', why: 'On while playing. Dim the lights when it turns on; bring them up when it turns off.' },
+      { name: 'Media Playing', type: 'occupancy', state: 'playing', why: 'On while playing. Dim the lights when it turns on; bring them up when it turns off.' },
     ],
   },
   {
     id: 'credits',
-    name: 'Credits-Aware',
+    name: 'Simple + Credits',
     creditsAware: true,
     tagline: 'One sensor. Lights up for the credits too.',
     recommended: true,
-    about: 'Like Simple, but the sensor also turns off when the credits start, back on for a mid-credits scene, and off again for the rest.',
+    about: 'Like Simple, but the sensor also turns off for the credits. By default it turns back on for a mid-credits scene and off again after it (Credits behavior in Settings).',
     sensors: [
-      { name: 'Media Playing', type: 'occupancy', state: 'playing', why: 'On while playing, except during the credits. Dim the lights when it turns on; bring them up when it turns off.' },
+      { name: 'Media Playing', type: 'occupancy', state: 'playing', except: ['credits'], why: 'On while playing, except during the credits. Dim the lights when it turns on; bring them up when it turns off.' },
     ],
   },
   {
     id: 'states',
     name: 'Every State',
     creditsAware: true,
-    tagline: 'Four sensors. Credits-Aware, with different lighting for pause, credits and the end.',
+    tagline: 'Four sensors. Different lighting for playing, pause, credits and the end.',
     about: 'One sensor per state, exactly one on at a time, so each moment can have its own scene or fade speed.',
     sensors: [
-      { name: 'Media Playing', type: 'occupancy', state: 'playing', why: 'On while playing, except during the credits. Dim the lights.' },
-      { name: 'Media Paused', type: 'occupancy', state: 'paused', why: 'On while paused for more than a moment. Bring the lights up a little.' },
+      { name: 'Media Playing', type: 'occupancy', state: 'playing', except: ['credits'], why: 'On while playing, except during the credits. Dim the lights.' },
+      { name: 'Media Paused', type: 'occupancy', state: 'paused', except: ['credits'], why: 'On while paused for more than a moment. Bring the lights up a little.' },
       { name: 'Credits Rolling', type: 'occupancy', state: 'credits', why: 'On during the credits (movies and TV). Fade the lights up slowly.' },
       { name: 'Nothing Playing', type: 'occupancy', state: 'idle', why: 'On when playback ends, unless the next episode starts. Normal lighting.' },
     ],
@@ -135,7 +159,7 @@ export const DEFAULT_PRESET = 'credits';
 
 export function presetSensors(id, selection) {
   const preset = PRESETS.find((p) => p.id === id);
-  return (preset?.sensors ?? []).map(({ name, type, state }) => ({ id: sensorId(), name, type, state, filters: filtersFrom(selection) }));
+  return (preset?.sensors ?? []).map(({ name, type, state, except = [] }) => ({ id: sensorId(), name, type, state, except: [...except], filters: filtersFrom(selection) }));
 }
 
 export function libraryRef(server, library) {
@@ -173,8 +197,9 @@ function list(names, empty) {
 /** One plain-language line describing what a sensor does. */
 export function summarize(sensor, selection = {}) {
   const name = (items, id, key, field = 'id') => items?.find((item) => item[field] === id)?.[key] ?? id;
+  const except = CAN_EXCEPT.includes(sensor.state) ? (sensor.except ?? []) : [];
   const when = SENSOR_TYPES[sensor.type]?.state
-    ? `On while ${(CONDITIONS[sensor.state] ?? CONDITIONS.playing).toLowerCase()}`
+    ? `On while ${({ idle: 'nothing is playing', active: 'playing or paused', credits: 'in the credits', intro: 'in the intro' })[sensor.state] ?? (CONDITIONS[sensor.state] ?? CONDITIONS.playing).toLowerCase()}${except.length ? `, except during ${except.map((e) => EXCEPTIONS[e]?.label ?? e).join(' and ')}` : ''}`
     : `Pressed when ${list((sensor.events ?? []).map((e) => EVENTS[e]?.phrase ?? e), 'nothing (choose an event)')}`;
   const f = sensor.filters ?? emptyFilters();
   const where = list(f.players.map((id) => name(selection.players, id, 'name')), 'any player');
@@ -210,4 +235,52 @@ export function setTiming(timing, field, value) {
     next[field.key] = field.scale && field.storedIn !== 'min' ? number * field.scale : number;
   }
   return next;
+}
+
+/* ---------- changing servers ---------- */
+
+const libraryRefs = (discovery) => (discovery.servers ?? []).flatMap((server) => server.libraries.map((l) => libraryRef(server, l)));
+
+/**
+ * Brings the setup choices in line with the servers just discovered: libraries of servers no longer
+ * chosen are dropped, and each newly added server gets its Movies and TV libraries chosen.
+ */
+export function reconcileSelection(selection, discovery, previousServerIds = []) {
+  const available = libraryRefs(discovery);
+  const keys = new Set(available.map((l) => l.key));
+  const added = available.filter((l) => !previousServerIds.includes(l.serverId) && LIBRARY_KINDS[l.kind]?.preselect);
+  const kept = (selection.libraries ?? []).filter((l) => keys.has(l.key));
+  return {
+    ...selection,
+    libraries: selection.allLibraries ? [] : [...kept, ...added.filter((l) => !kept.some((k) => k.key === l.key))],
+  };
+}
+
+/**
+ * Keeps sensors' library filters valid after servers change. A filter loses libraries that are gone,
+ * and gains the new servers' libraries of the kinds it already uses (a Movies and TV sensor gets the
+ * new server's Movies and TV; a Music sensor gets its Music). A filter left empty would mean "all
+ * libraries", so it gets every library of its former kinds instead. "All libraries" filters stay as they are.
+ */
+export function reconcileSensors(sensors, discovery, previousServerIds = [], knownLibraries = []) {
+  const available = libraryRefs(discovery);
+  const kindOf = new Map([...knownLibraries, ...available].map((l) => [l.key, l.kind]));
+  return sensors.map((sensor) => {
+    const before = sensor.filters?.libraries ?? [];
+    if (before.length === 0) {
+      return sensor;
+    }
+    const kinds = new Set(before.map((key) => kindOf.get(key)).filter(Boolean));
+    const kept = before.filter((key) => available.some((l) => l.key === key));
+    const additions = available
+      .filter((l) => (kept.length === 0 || !previousServerIds.includes(l.serverId)) && kinds.has(l.kind))
+      .map((l) => l.key);
+    let libraries = [...new Set([...kept, ...additions])];
+    if (libraries.length === 0) {
+      // Nothing of the same kinds is left: fall back to Movies and TV rather than "all libraries".
+      libraries = available.filter((l) => LIBRARY_KINDS[l.kind]?.preselect).map((l) => l.key);
+    }
+    // Still nothing: keep the old keys, which match nothing, rather than widening to every library.
+    return { ...sensor, filters: { ...sensor.filters, libraries: libraries.length > 0 ? libraries : before } };
+  });
 }

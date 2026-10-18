@@ -28,7 +28,7 @@ Initial development.
 - "All" options for players, people, libraries and media types.
 - Sensor type choice with Occupancy marked as recommended.
 - Three suggested setups, all state sensors (chosen after testing buttons and sensors against a real Homebridge, a HAP
-  controller and a simulated Plex server): Simple (one sensor), Credits-Aware (one sensor that also turns off for the
+  controller and a simulated Plex server): Simple (one sensor), Simple + Credits (one sensor that also turns off for the
   credits and back on for a mid-credits scene) and Every State (Media Playing, Media Paused, Credits Rolling, Nothing
   Playing).
 - Mid-credits scenes: credits follow every credits marker by default, so a scene between them dims the lights again.
@@ -38,6 +38,14 @@ Initial development.
   settings page shows a notice until dismissed; webhooks start on their own when Plex Pass returns.
 - Advanced has separate, confirmed "Reset advanced settings" and "Reset Intermission" (signs out, removes the webhook,
   sensors and settings, then setup starts again).
+- Changing servers later keeps choices and sensors consistent: libraries of removed servers are dropped, new servers'
+  libraries of the same kinds are added, and nothing is saved until the last step (Cancel leaves everything as it was).
+- Fixed: "Change servers, players and libraries" failed for anyone already set up.
+- Sensor conditions are now a state plus optional "except during the credits / the intro"; older configs keep their
+  meaning. The editor shows Credits behavior next to sensors it affects.
+- Intro detection from Plex's intro markers: "In the intro" condition, intro exceptions, and intro start/end events.
+- Commands: named shell commands run when a sensor turns on or off or a button is pressed (off by default).
+- Preset 2 is now "Simple + Credits". Advanced is now "Settings", with collapsible Webhook options, Advanced and Reset.
 - "Recipes & Notes" is now "Guide", with a section per suggested setup and ideas for Every State.
 - "Mid-credits scenes" is now "Credits behavior", noting it only affects credits-aware sensors.
 - A library added later (including Other Videos) is recognised the first time something plays from it.

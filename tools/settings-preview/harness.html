@@ -1,0 +1,89 @@
+<!doctype html><html><head><meta charset="utf-8"><base href="/public/"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/bootstrap.css"><style>body{padding:16px}</style>
+<script>
+const scenario = new URLSearchParams(location.search).get('s') || 'signin';
+const dark = new URLSearchParams(location.search).get('dark');
+if (dark) document.write('<style>body{background:#1e1f22;color:#ddd}</style>');
+const discovery = {
+  players: [
+    { id: 'ATV', name: 'Living Room', product: 'Plex for Apple TV', platform: 'tvOS', plays: 48, playingNow: true },
+    { id: 'LG', name: 'Bedroom TV', product: 'Plex for LG', platform: 'webOS', plays: 12 },
+    { id: 'PH', name: "Steve's iPhone", product: 'Plex for iOS', platform: 'iOS', device: 'iPhone', plays: 3 },
+    { id: 'WEB', name: 'Chrome', product: 'Plex Web', platform: 'Chrome', plays: 1 },
+  ],
+  users: [{ id: '1', name: 'Steve', admin: true, managed: false }, { id: '2', name: 'Jen', admin: false, managed: false }, { id: '3', name: 'Kids', admin: false, managed: true }],
+  servers: [
+    { id: 'srv', name: 'Unraid', libraries: [
+      { id: '1', key: 'srv/1', title: 'Movies', type: 'movie', kind: 'movie' },
+      { id: '2', key: 'srv/2', title: 'TV Shows', type: 'show', kind: 'show' },
+      { id: '3', key: 'srv/3', title: 'Music', type: 'artist', kind: 'music' },
+      { id: '4', key: 'srv/4', title: 'Photos', type: 'photo', kind: 'photo' },
+      { id: '5', key: 'srv/5', title: 'Home Videos', type: 'movie', kind: 'other' } ] },
+    { id: 'cab', name: 'Cabin', libraries: [{ id: '1', key: 'cab/1', title: 'Kids Movies', type: 'movie', kind: 'movie' }] },
+  ],
+};
+const signedIn = scenario !== 'signin' && scenario !== 'code';
+const qs = new URLSearchParams(location.search);
+const serverList = (qs.get('servers') ?? 'srv,cab,mom').split(',');
+const allServers = [{ id: 'srv', name: 'Unraid', owned: true }, { id: 'cab', name: 'Cabin', owned: true }, { id: 'mom', name: "Mom's Plex", owned: false }];
+let config = { platform: 'PlexIntermission', name: 'Intermission' };
+if (['main', 'edit', 'advanced', 'recipes', 'review', 'ended', 'nopass-adv', 'commands', 'edit-cmd'].includes(scenario)) {
+  config.servers = [{ id: 'srv', name: 'Unraid', url: 'http://10.0.0.2:32400' }, { id: 'cab', name: 'Cabin', url: 'http://10.0.1.2:32400' }];
+  config.selection = { players: [{ id: 'ATV', name: 'Living Room', product: 'Plex for Apple TV' }], allUsers: true, users: [], libraries: [
+    { key: 'srv/1', title: 'Movies', kind: 'movie', serverId: 'srv', serverName: 'Unraid' }, { key: 'srv/2', title: 'TV Shows', kind: 'show', serverId: 'srv', serverName: 'Unraid' }] };
+  const f = () => ({ players: ['ATV'], users: [], libraries: ['srv/1', 'srv/2'], mediaTypes: [] });
+  config.sensors = [
+    { id: 's-1', name: 'Media Playing', type: 'occupancy', state: 'playing', except: ['credits'], filters: f(), run: { on: ['c-1'], off: [], press: [] } },
+    { id: 's-3', name: 'Media Paused', type: 'occupancy', state: 'paused', except: ['credits'], filters: f() },
+    { id: 's-4', name: 'Credits Rolling', type: 'occupancy', state: 'credits', except: [], filters: f() },
+    { id: 's-5', name: 'Nothing Playing', type: 'occupancy', state: 'idle', except: [], filters: f() },
+  ];
+  config.preset = 'states';
+  if (scenario === 'commands' || scenario === 'edit-cmd') config.commands = { enabled: true, list: [{ id: 'c-1', name: 'Projector wide', command: 'curl -s http://projector.local/lens?memory={type}' }, { id: 'c-2', name: 'Log title', command: 'echo {title} >> /homebridge/watched.log' }] };
+}
+if (scenario === 'choose') config.servers = [{ id: 'srv', name: 'Unraid', url: 'http://x' }, { id: 'cab', name: 'Cabin', url: 'http://y' }];
+const hook = { plexPass: true, port: 32550, portState: scenario === 'webhooks' ? 'other' : 'intermission', serverSettings: [{ name: 'Unraid', enabled: false }], url: 'http://10.0.0.5:32550/3f9a0c1d2e4b5a6978c0d1e2f3a4b5c6', registered: false, others: ['http://10.69.1.2:32599', 'https://notifiarr.example/api/v1/plex'], stale: ['http://10.69.1.9:32550/3f9a0c1d2e4b5a6978c0d1e2f3a4b5c6'], disabledOn: ['Unraid'] };
+const report = 'Intermission 0.1.0\nHomebridge UI 5.9.0, Docker, Node.js v24.3.0\n\nPlex account: Steve\nPlex Pass: yes\n\nServer: Unraid (http://10.0.0.2:32400)\n  Version: 1.41.6\n  Credits detection: as a scheduled task and when media is added\n  Webhooks setting: on\n  Library 1: Movies (movie, tv.plex.agents.movie)\n\nSensors: 4';
+const preset = qs.get('existing');
+if (preset) {
+  config = JSON.parse(preset);
+}
+window.__config = () => config;
+const listeners = {};
+window.homebridge = {
+  addEventListener: (n, f) => { listeners[n] = f; },
+  hideSchemaForm() {}, fixScrollHeight() {}, disableSaveButton() { document.title = 'save:off'; }, enableSaveButton() { document.title = 'save:on'; },
+  userCurrentLightingMode: async () => (dark ? 'dark' : 'light'),
+  serverEnv: { env: { packageVersion: '5.9.0', runningInDocker: true } },
+  toast: { success: console.log, info: console.log, error: console.log, warning: console.log },
+  getPluginConfig: async () => [config],
+  updatePluginConfig: async (c) => { config = c[0]; return c; },
+  savePluginConfig: async () => {},
+  request: async (path, body) => {
+    await new Promise((r) => setTimeout(r, 50));
+    switch (path) {
+      case '/status': return !signedIn ? { signedIn: false }
+        : scenario === 'ended' ? { signedIn: true, username: 'Steve', plexPass: false, plexPassChange: { active: false, changedAt: '2026-10-30T15:00:00Z' } }
+        : { signedIn: true, username: 'Steve', plexPass: !['choose', 'nopass-adv'].includes(scenario) };
+      case '/signin/start': return body.mode === 'code' ? { code: 'K7QX', linkUrl: 'https://plex.tv/link' } : { authUrl: 'https://app.plex.tv/auth#?x' };
+      case '/signin/check': return { done: false };
+      case '/servers': return allServers.filter((s) => serverList.includes(s.id));
+      case '/servers/select': return { servers: body.ids.map((id) => ({ id, name: allServers.find((s) => s.id === id).name, url: `http://${id}` })), failed: [] };
+      case '/discover': return { ...discovery, servers: [...discovery.servers, { id: 'mom', name: "Mom's Plex", libraries: [{ id: '1', key: 'mom/1', title: 'Mom Movies', type: 'movie', kind: 'movie' }] }].filter((s) => body.servers.some((b) => b.id === s.id)) };
+      case '/webhook/status': return ['ended', 'nopass-adv'].includes(scenario) ? { ...hook, plexPass: false } : hook;
+      case '/webhook/add': return { ...hook, registered: true, disabledOn: [] };
+      case '/report': return report;
+      case '/commands/test': return { code: 0, output: 'OK: lens memory 2', timedOut: false };
+      case '/about': return { version: '0.1.0', node: 'v24.3.0', repo: 'https://github.com/maxrogers/homebridge-plex-intermission', issues: 'https://github.com/maxrogers/homebridge-plex-intermission/issues', funding: 'https://ko-fi.com/maxrogers' };
+      case '/webhook/update': return { ...hook, registered: true, stale: [], disabledOn: [], serverSettings: [{ name: 'Unraid', enabled: true }] };
+    }  },
+};
+
+</script></head><body><div id="mount"></div>
+<script>
+fetch('/public/index.html').then((r) => r.text()).then((html) => {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  for (const el of doc.querySelectorAll('link,div')) if (el.parentElement === doc.body || el.parentElement === doc.head) document.getElementById('mount').append(el);
+  const s = document.createElement('script'); s.type = 'module'; s.src = '/public/app.js'; s.onload = () => setTimeout(() => listeners.ready?.(), 20); document.body.append(s);
+});
+</script></body></html>

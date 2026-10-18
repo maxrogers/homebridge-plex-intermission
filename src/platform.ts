@@ -2,8 +2,9 @@ import type { API, DynamicPlatformPlugin, Logging, PlatformAccessory, PlatformCo
 
 import { EventEmitter } from 'node:events';
 
-import { parseConfig, type IntermissionConfig } from './config.js';
-import { Controller, type SensorOutput } from './controller.js';
+import { parseConfig, type IntermissionConfig, type SensorConfig } from './config.js';
+import { CommandRunner, type NamedCommand } from './commands.js';
+import { Controller, type ChangeContext, type SensorOutput } from './controller.js';
 import { systemClock } from './engine/clock.js';
 import type { Logger } from './engine/types.js';
 import { LibraryTypes } from './plex/library-types.js';
@@ -27,23 +28,66 @@ class SensorHub {
   private readonly votes = new Set<number>();
   private readonly allMustAgree: boolean;
 
-  constructor(readonly accessory: SensorAccessory) {
+  constructor(
+    readonly accessory: SensorAccessory,
+    private readonly commands: CommandHooks,
+  ) {
     this.allMustAgree = accessory.config.state === 'idle';
   }
 
   output(voter: number): SensorOutput {
     return {
       config: this.accessory.config,
-      setActive: (active) => {
+      setActive: (active, context) => {
         if (active !== this.allMustAgree) {
           this.votes.add(voter);
         } else {
           this.votes.delete(voter);
         }
-        this.accessory.setActive(this.allMustAgree ? this.votes.size === 0 : this.votes.size > 0);
+        const on = this.allMustAgree ? this.votes.size === 0 : this.votes.size > 0;
+        if (this.accessory.setActive(on)) {
+          this.commands.run(this.accessory.config, on ? 'on' : 'off', context);
+        }
       },
-      press: () => this.accessory.press(),
+      press: (context) => {
+        this.accessory.press();
+        this.commands.run(this.accessory.config, 'press', context);
+      },
     };
+  }
+}
+
+/** Runs a sensor's commands for a change, with what was playing. */
+class CommandHooks {
+  private readonly byId: Map<string, NamedCommand>;
+
+  constructor(
+    commands: readonly NamedCommand[],
+    private readonly runner: CommandRunner,
+  ) {
+    this.byId = new Map(commands.map((command) => [command.id, command]));
+  }
+
+  run(sensor: SensorConfig, change: 'on' | 'off' | 'press', context?: ChangeContext): void {
+    if (this.byId.size === 0) {
+      return;
+    }
+    const session = context?.session;
+    for (const id of sensor.run[change]) {
+      const command = this.byId.get(id);
+      if (command) {
+        void this.runner.run(command, {
+          sensor: sensor.name,
+          state: change === 'press' ? 'pressed' : change,
+          event: context?.event,
+          title: session?.media.title,
+          type: session?.media.type,
+          library: session?.media.librarySectionTitle,
+          player: session?.playerTitle ?? session?.playerId,
+          user: session?.user,
+        });
+      }
+    }
   }
 }
 
@@ -80,7 +124,8 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
 
   private async start(): Promise<void> {
     // Sensors exist even before sign-in, so Home automations that use them keep working.
-    const hubs = this.syncAccessories().map((accessory) => new SensorHub(accessory));
+    const commands = new CommandHooks(this.settings.commands, new CommandRunner(this.log));
+    const hubs = this.syncAccessories().map((accessory) => new SensorHub(accessory, commands));
 
     const storage = new Storage(this.api.user.storagePath());
     const credentials = await storage.readCredentials();

@@ -33,10 +33,12 @@ await writeFile(join(storage, 'config.json'), JSON.stringify({
     platform: 'PlexIntermission', name: 'Intermission', setupId: 'lab', detailedLogging: true,
     servers: [{ id: 'mock-server', name: 'Mock', url: `http://127.0.0.1:${PLEX_PORT}` }],
     webhook: { enabled: true, port: WEBHOOK_PORT },
+    commands: { enabled: true, list: [{ id: 'log', name: 'Log', command: `echo {sensor} {state} {title} >> ${new URL('./commands.log', import.meta.url).pathname}` }] },
     sensors: [
       { id: 's-play', name: 'Media Playing', type: 'occupancy', state: 'playing', filters },
       { id: 's-pause', name: 'Media Paused', type: 'occupancy', state: 'paused', filters },
-      { id: 's-credits', name: 'Credits Rolling', type: 'occupancy', state: 'credits', filters },
+      { id: 's-credits', name: 'Credits Rolling', type: 'occupancy', state: 'credits', filters, run: { on: ['log'], off: ['log'] } },
+      { id: 's-intro', name: 'Intro Playing', type: 'occupancy', state: 'intro', filters, run: { on: ['log'], off: ['log'] } },
       { id: 's-idle', name: 'Nothing Playing', type: 'occupancy', state: 'idle', filters },
       { id: 'b-start', name: 'Started Button', type: 'button', events: ['play', 'resume'], filters },
       { id: 'b-pause', name: 'Paused Button', type: 'button', events: ['pause'], filters },
@@ -143,14 +145,15 @@ async function reconnectHub() {
 
 // ---- mid-credits scene ----
 plex.addItem({ ratingKey: '103', title: 'Scene Movie', type: 'movie', durationMs: 200_000, markers: [
+  { type: 'intro', startTimeOffset: 31_000, endTimeOffset: 36_000, final: false },
   { type: 'credits', startTimeOffset: 40_000, endTimeOffset: 60_000, final: false },
   { type: 'credits', startTimeOffset: 80_000, endTimeOffset: 200_000, final: true },
 ] });
-const four = ['Media Playing', 'Media Paused', 'Credits Rolling', 'Nothing Playing'];
+const four = ['Media Playing', 'Media Paused', 'Credits Rolling', 'Nothing Playing', 'Intro Playing'];
 const snap = (label) => { const on = four.filter((n) => hub.values.get(hub.byName.get(n).key)).join('+') || '(none)'; say(`${label.padEnd(34)} -> ${on}`); checks.push({ label, on }); };
 phase('scene movie');
-plex.play('103', 30_000); await sleep(6_000); snap('33 s, playing');
-await sleep(8_000); snap('41 s, first credits');
+plex.play('103', 30_000); await sleep(4_000); snap('~34 s, intro'); await sleep(3_000); snap('~37 s, playing');
+await sleep(7_000); snap('44 s, first credits');
 plex.pause(); await sleep(5_000); snap('paused in the credits');
 plex.resume(); await sleep(2_000); snap('resumed in the credits');
 await sleep(16_000); snap('~60 s, mid-credits scene');

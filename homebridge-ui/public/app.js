@@ -1,7 +1,7 @@
 import { DEVICE_ICONS, deviceIcon, LIBRARY_ICONS, PEOPLE_ICONS, SENSOR_ICONS } from './device-icons.js';
 import {
-  CONDITIONS, DEFAULT_WEBHOOK_PORT, EVENTS, LIBRARY_KINDS, MEDIA_TYPES, PLATFORM, PRESETS, DEFAULT_PRESET, SENSOR_TYPES, TIMING_FIELDS,
-  availableMediaTypes, defaultSelection, libraryRef, needsPlexPass, presetSensors, newSensor, playerRef, setTiming, summarize, timingValue,
+  CONDITIONS, DEFAULT_WEBHOOK_PORT, EVENTS, EXCEPTIONS, CAN_EXCEPT, CREDITS_MODES, LIBRARY_KINDS, MEDIA_TYPES, PLATFORM, PRESETS, DEFAULT_PRESET, SENSOR_TYPES, TIMING_FIELDS,
+  availableMediaTypes, defaultSelection, creditsMode, libraryRef, needsPlexPass, presetSensors, sensorId, usesCredits, reconcileSelection, reconcileSensors, newSensor, playerRef, setTiming, summarize, timingValue,
 } from './model.js';
 
 const root = document.getElementById('intermission');
@@ -51,7 +51,9 @@ async function saveConfig({ persist = false } = {}) {
   }
 }
 
-const servers = () => state.config.servers ?? [];
+/** The servers being set up (during setup) or saved. Setup commits its choice only when it finishes. */
+const servers = () => state.setupServers ?? state.config.servers ?? [];
+const savedServerIds = () => (state.config.servers ?? []).map((s) => s.id);
 const selection = () => state.config.selection ?? { players: [], allUsers: true, users: [], libraries: [] };
 const webhookBody = () => ({ config: state.config, servers: servers() });
 
@@ -222,8 +224,10 @@ async function loadServers() {
   go('server');
   await busy('Finding your Plex servers…', async () => {
     state.servers = await request('/servers');
+    const saved = savedServerIds().filter((id) => state.servers.some((s) => s.id === id));
     const owned = state.servers.filter((s) => s.owned);
-    state.chosenServers = (owned.length > 0 ? owned : state.servers).map((s) => s.id);
+    // Changing servers later starts from the current choice; a first setup from the servers you own.
+    state.chosenServers = saved.length > 0 ? saved : (owned.length > 0 ? owned : state.servers).map((s) => s.id);
   });
   if (state.servers.length === 1 && !state.error) {
     await useServers();
@@ -240,8 +244,7 @@ async function useServers() {
     for (const failure of result.failed) {
       homebridge.toast.warning?.(`${failure.name}: ${failure.error}`, 'Skipped');
     }
-    state.config.servers = result.servers;
-    await saveConfig();
+    state.setupServers = result.servers;
   });
   if (!state.error) {
     await loadWebhookStep();
@@ -255,16 +258,31 @@ async function loadWebhookStep() {
   });
 }
 
-async function loadDiscovery(next) {
+async function loadDiscovery(next, { keepSelection = false } = {}) {
+  // Refresh keeps what was picked on this page; otherwise start from the saved choices.
+  const current = keepSelection ? state.selection : undefined;
+  const currentServers = keepSelection ? servers().map((s) => s.id) : savedServerIds();
+  state.discovery = undefined;
+  state.selection = undefined;
   go(next);
   await busy('Looking for your players, people and libraries…', async () => {
     state.discovery = await request('/discover', { servers: servers() });
-    state.selection = state.config.selection ? structuredClone(state.config.selection) : defaultSelection(state.discovery);
+    const base = current ?? state.config.selection;
+    state.selection = base
+      ? reconcileSelection(structuredClone(base), state.discovery, currentServers)
+      : defaultSelection(state.discovery);
     state.selection.allUsers ??= state.selection.users.length === 0;
   });
 }
 
 async function finishSetup() {
+  if (state.setupServers) {
+    if (state.config.sensors.length > 0) {
+      state.config.sensors = reconcileSensors(state.config.sensors, state.discovery, savedServerIds(), state.config.selection?.libraries ?? []);
+    }
+    state.config.servers = state.setupServers;
+    state.setupServers = undefined;
+  }
   state.config.selection = state.selection;
   if (state.template !== 'scratch' && state.config.sensors.length === 0) {
     state.config.sensors = presetSensors(state.template, state.selection);
@@ -302,7 +320,13 @@ function reportBody() {
 
 function render() {
   const views = { loading, signin, server, webhooks, choose, template, main };
-  root.innerHTML = `${(views[state.view] ?? loading)()}${footer()}`;
+  try {
+    root.innerHTML = `${(views[state.view] ?? loading)()}${footer()}`;
+  } catch (error) {
+    // Never leave a blank page: show what went wrong with a way back.
+    root.innerHTML = `<div class="im-alert im-alert-danger">Something went wrong showing this page: ${escape(error.message)}</div>
+      <button class="btn btn-outline-secondary" data-action="reload">Reload</button>${footer()}`;
+  }
   homebridge.fixScrollHeight?.();
 }
 
@@ -354,7 +378,14 @@ function server() {
     <div class="d-flex gap-2">
       ${state.servers.length > 0 ? `<button class="btn btn-im" data-action="use-servers" ${state.chosenServers.length === 0 ? 'disabled' : ''}>Next</button>` : ''}
       ${state.error ? '<button class="btn btn-outline-secondary" data-action="reload-servers">Try again</button>' : ''}
+      ${cancelSetup()}
     </div>`;
+}
+
+/** Changing servers later can be abandoned; nothing is saved until the last step. */
+function cancelSetup() {
+  return savedServerIds().length > 0 && state.config.sensors.length > 0
+    ? '<button class="btn btn-outline-secondary ms-auto" data-action="cancel-setup">Cancel</button>' : '';
 }
 
 function section(title, help, body) {
@@ -362,7 +393,7 @@ function section(title, help, body) {
 }
 
 function choose() {
-  if (state.busy || !state.discovery) {
+  if (state.busy || !state.discovery || !state.selection) {
     return `${stepHeader(3, 'Choose what Intermission watches')}${notices()}`;
   }
   const sel = state.selection;
@@ -381,6 +412,7 @@ function choose() {
     <div class="d-flex gap-2">
       <button class="btn btn-im" data-action="to-template" ${(sel.allUsers === false && sel.users.length === 0) || (!sel.allPlayers && sel.players.length === 0) || (!sel.allLibraries && sel.libraries.length === 0) ? 'disabled' : ''}>Next</button>
       <button class="btn btn-outline-secondary" data-action="refresh-choose">Refresh</button>
+      ${cancelSetup()}
     </div>`;
 }
 
@@ -444,7 +476,7 @@ function template() {
 }
 
 function main() {
-  const tabs = { sensors: 'Sensors', recipes: 'Guide', advanced: 'Advanced' };
+  const tabs = { sensors: 'Sensors', recipes: 'Guide', advanced: 'Settings' };
   const nav = Object.entries(tabs).map(([id, label]) => `<button class="im-tab" role="tab" aria-selected="${state.tab === id}" data-action="tab" data-id="${id}">${label}</button>`).join('');
   const content = { sensors: sensorsTab, recipes: recipesTab, advanced: advancedTab }[state.tab]();
   const pass = state.status.plexPass === undefined ? ''
@@ -550,7 +582,11 @@ function editor(sensor, sel) {
     <label class="im-label">Type <span>(not sure? choose Occupancy sensor)</span></label>
     <div class="im-options im-types">${types}</div>
     ${isState
-      ? `<label class="im-label" for="im-state">On while</label><select id="im-state" class="form-select" data-field="state">${conditions}</select>`
+      ? `<label class="im-label" for="im-state">On while</label><select id="im-state" class="form-select" data-field="state">${conditions}</select>
+        ${CAN_EXCEPT.includes(sensor.state) ? `<label class="im-label">Except during <span>(the sensor turns off for these)</span></label>
+          <div class="im-chips">${Object.entries(EXCEPTIONS).map(([id, e]) => `<button class="im-chip" data-action="toggle-except" data-id="${id}" ${pressed((sensor.except ?? []).includes(id))}>${escape(e.label)}</button>`).join('')}</div>` : ''}
+        ${usesCredits(sensor) ? `<p class="im-hint">Credits behavior: ${escape(CREDITS_MODES[creditsMode(state.config.timing)])}. <button class="im-link" data-action="open-credits">Change in Settings</button></p>` : ''}
+        ${sensor.state === 'intro' || (sensor.except ?? []).includes('intro') ? '<p class="im-hint">Intros come from Plex\'s intro markers, found on servers with Plex Pass, mostly for TV episodes.</p>' : ''}`
       : `<label class="im-label">Pressed when</label><div class="im-chips">${chips('toggle-event', Object.keys(EVENTS), sensor.events ?? [],
         (e) => `${EVENTS[e].label}${EVENTS[e].plexPass ? ' ★' : ''}`, (e) => noPass && EVENTS[e].plexPass)}</div>
         <div class="im-hint">★ needs Plex Pass</div>`}
@@ -562,12 +598,26 @@ function editor(sensor, sel) {
     ${filter('libraries', libraries, (l) => (many ? `${l.title} · ${l.serverName}` : l.title), 'All libraries')}
     ${sensor.filters.mediaTypes.length > 0 ? `<label class="im-label">Media types <span>(from an older version; libraries now decide this)</span></label>
       ${filter('mediaTypes', mediaTypes, (t) => MEDIA_TYPES[t], 'All media types')}` : ''}
+    ${runCommands(sensor)}
     <p class="im-hint mt-2">Intermission knows each library's type: Movies and TV Shows get credits handling; Music, Photos and Other Videos just follow play, pause and stop.</p>
     <div class="d-flex gap-2 mt-3">
       <button class="btn btn-sm ${confirming ? 'btn-danger' : 'btn-outline-danger'}" data-action="delete" data-id="${escape(sensor.id)}">${confirming ? 'Tap again to remove' : `Remove ${sensor.type === 'button' ? 'button' : 'sensor'}`}</button>
       ${confirming ? '<button class="btn btn-sm btn-outline-secondary" data-action="cancel-confirm">Keep it</button>' : ''}
     </div>
   </div>`;
+}
+
+/** "Run commands" in the sensor editor, only when commands are turned on and at least one exists. */
+function runCommands(sensor) {
+  const list = state.config.commands?.enabled ? (state.config.commands.list ?? []).filter((c) => c.name && c.command) : [];
+  if (list.length === 0) {
+    return '';
+  }
+  const row = (when, label) => `<label class="im-label">${label}</label><div class="im-chips">${list.map((c) =>
+    `<button class="im-chip" data-action="toggle-run" data-when="${when}" data-id="${escape(c.id)}" ${pressed((sensor.run?.[when] ?? []).includes(c.id))}>${escape(c.name)}</button>`).join('')}</div>`;
+  return `<div class="im-run">${SENSOR_TYPES[sensor.type]?.state
+    ? `${row('on', 'Run commands when it turns on')}${row('off', 'Run commands when it turns off')}`
+    : row('press', 'Run commands when pressed')}</div>`;
 }
 
 function webhookNotice() {
@@ -660,6 +710,7 @@ function webhooks() {
     <div class="d-flex gap-2">
       <button class="btn btn-im" data-action="webhooks-next">${changes ? 'Apply and continue' : 'Continue'}</button>
       ${changes ? '<button class="btn btn-outline-secondary" data-action="webhooks-skip">Skip for now</button>' : ''}
+      ${cancelSetup()}
     </div>`;
 }
 
@@ -683,7 +734,7 @@ function recipesTab() {
       ${automation('Media Playing')}${step('Choose your lights and set them dim, or pick a scene.')}
       ${automation('Media Playing', 'Stops Detecting')}${step('Set your normal lighting.')}</ol></div>
 
-    <h5 class="mt-4">2. Credits-Aware${mark('credits')}</h5>
+    <h5 class="mt-4">2. Simple + Credits${mark('credits')}</h5>
     <p class="small">Best for most living rooms and theaters. The same two automations as Simple; the lights also come up when the credits start and go down again for a mid-credits scene.</p>
     ${fade('Media Playing', 'detected')}
 
@@ -715,6 +766,46 @@ function recipesTab() {
     </ul></div>`;
 }
 
+/** A section that opens on tap; stays open across redraws. */
+function collapsible(key, title, hint, body) {
+  const open = state.open?.[key] === true;
+  return `<div class="im-card im-collapsible">
+      <button class="im-collapse-head" data-action="toggle-open" data-id="${key}" aria-expanded="${open}">
+        <span><strong>${title}</strong>${hint ? `<small>${hint}</small>` : ''}</span><span class="im-chevron" aria-hidden="true">${open ? '▾' : '▸'}</span>
+      </button>
+      ${open ? `<div class="im-collapse-body">${body}</div>` : ''}
+    </div>`;
+}
+
+function commandsSection() {
+  const commands = state.config.commands ?? {};
+  const list = commands.list ?? [];
+  const rows = list.map((c) => {
+    const result = state.commandTests?.[c.id];
+    return `<div class="im-command">
+      <div class="row g-2">
+        <div class="col-sm-4"><input class="form-control form-control-sm" placeholder="Name, for example Projector wide" data-command-name="${escape(c.id)}" value="${escape(c.name ?? '')}" maxlength="40"></div>
+        <div class="col-sm-8"><input class="form-control form-control-sm im-mono" placeholder="curl -s http://projector.local/lens?memory=2" data-command-line="${escape(c.id)}" value="${escape(c.command ?? '')}"></div>
+      </div>
+      <div class="d-flex gap-2 mt-1 align-items-center">
+        <button class="btn btn-sm btn-outline-secondary" data-action="test-command" data-id="${escape(c.id)}" ${c.command ? '' : 'disabled'}>Test</button>
+        <button class="btn btn-sm ${state.confirming === `command:${c.id}` ? 'btn-danger' : 'btn-outline-danger'}" data-action="remove-command" data-id="${escape(c.id)}">${state.confirming === `command:${c.id}` ? 'Tap again to remove' : 'Remove'}</button>
+        ${result ? `<span class="im-hint m-0">${result.running ? 'Running…' : result.timedOut ? 'Stopped after 15 s' : result.code === 0 ? '✓ Worked' : `Failed (exit ${escape(result.code)})`}</span>` : ''}
+      </div>
+      ${result?.output ? `<pre class="im-output">${escape(result.output)}</pre>` : ''}
+    </div>`;
+  }).join('');
+  return `<div class="im-field">
+      <label for="im-commands"><strong>Commands</strong><small>Run your own commands when a sensor turns on or off or a button is pressed, for example to switch a projector's lens memory. Each sensor then has a "Run commands" choice.</small></label>
+      <div class="form-check form-switch"><input id="im-commands" class="form-check-input" type="checkbox" data-commands-enabled ${commands.enabled ? 'checked' : ''}></div>
+    </div>
+    ${commands.enabled ? `<div class="im-field d-block">
+      ${rows || '<p class="im-hint mt-0">No commands yet.</p>'}
+      <button class="btn btn-sm btn-outline-secondary mt-2" data-action="add-command">Add command</button>
+      <p class="im-hint">Commands run on the Homebridge machine (inside the container when Homebridge runs in Docker), with a 30-second limit. You can use {title}, {type}, {library}, {player}, {user}, {sensor}, {state} and {event}; their values are quoted for you.</p>
+    </div>` : ''}`;
+}
+
 function advancedTab() {
   const timing = state.config.timing ?? {};
   const fields = TIMING_FIELDS.map((f) => `<div class="im-field">
@@ -725,37 +816,55 @@ function advancedTab() {
   const fallbackOff = timing.fallbackPercent === null;
   const percent = typeof timing.fallbackPercent === 'number' ? timing.fallbackPercent : 95;
   const webhook = state.config.webhook ?? {};
-  return `<div class="im-card im-banner mb-3">These rarely need changing. The defaults suit most setups.</div>
+  const mode = creditsMode(timing);
+  const sel = selection();
+  const libraryNames = sel.allLibraries ? 'All libraries' : sel.libraries.map((l) => l.title).join(', ') || 'None';
+  return `<div class="im-card">
+      <strong>Your setup</strong>
+      <dl class="im-facts">
+        <dt>Plex servers</dt><dd>${escape(servers().map((s) => s.name).join(', ') || 'None')}</dd>
+        <dt>Players</dt><dd>${escape(sel.allPlayers ? 'All players' : sel.players.map((p) => p.name).join(', ') || 'None')}</dd>
+        <dt>People</dt><dd>${escape(sel.allUsers === false ? sel.users.join(', ') : 'All Plex Home users')}</dd>
+        <dt>Libraries</dt><dd>${escape(libraryNames)}</dd>
+      </dl>
+      <p class="im-hint">These are the starting choices for new sensors. Each sensor can still be changed on its own.</p>
+      <div class="d-flex flex-wrap gap-2 mt-2">
+        <button class="btn btn-sm btn-outline-secondary" data-action="redo-setup">Change servers, players and libraries</button>
+        <button class="btn btn-sm ${state.confirming === 'signout' ? 'btn-danger' : 'btn-outline-danger'} ms-auto" data-action="signout">${state.confirming === 'signout' ? 'Tap again to sign out' : 'Sign out of Plex'}</button>
+      </div>
+    </div>
+
     <div class="im-card">
+      <strong>Credits</strong>
       <div class="im-field">
-        <label for="im-first"><strong>Credits behavior</strong><small>How a mid-credits scene is handled. Only affects Credits-Aware and Every State sensors (anything using "Playing, before the credits" or "In the credits").</small></label>
+        <label for="im-first"><strong>Credits behavior</strong><small>How a mid-credits scene is handled. Affects sensors that follow the credits: "except during the credits" or "In the credits" (Simple + Credits and Every State).</small></label>
         <select id="im-first" class="form-select form-select-sm" data-credits-mode>
-          <option value="scenes" ${(timing.midCredits ?? (timing.firstCreditsMarker === false ? 'final' : 'scenes')) === 'scenes' ? 'selected' : ''}>Dim again for mid-credits scenes (recommended)</option>
-          <option value="first" ${(timing.midCredits ?? (timing.firstCreditsMarker === false ? 'final' : 'scenes')) === 'first' ? 'selected' : ''}>Ignore scenes: credits from the first credits</option>
-          <option value="final" ${(timing.midCredits ?? (timing.firstCreditsMarker === false ? 'final' : 'scenes')) === 'final' ? 'selected' : ''}>Ignore scenes: credits from the final credits only</option></select>
+          <option value="scenes" ${mode === 'scenes' ? 'selected' : ''}>Dim again for mid-credits scenes (recommended)</option>
+          <option value="first" ${mode === 'first' ? 'selected' : ''}>Ignore scenes: credits from the first credits</option>
+          <option value="final" ${mode === 'final' ? 'selected' : ''}>Ignore scenes: credits from the final credits only</option></select>
       </div>
       <div class="im-field">
-        <label for="im-fallback"><strong>When a movie or episode has no credits marker</strong><small>With Plex Pass, Plex adds markers when it analyses new media; without it, only items that already have markers do. Otherwise use a share of the runtime. Movies and TV only.</small></label>
+        <label for="im-fallback"><strong>When a movie or episode has no credits marker</strong><small>With Plex Pass, Plex adds markers when it analyzes new media; without it, only items that already have markers have them. Otherwise use a share of the runtime. Movies and TV only.</small></label>
         <div><select id="im-fallback" class="form-select form-select-sm" data-fallback>
           <option value="percent" ${fallbackOff ? '' : 'selected'}>Use a percentage</option>
-          <option value="off" ${fallbackOff ? 'selected' : ''}>No credits event</option></select>
+          <option value="off" ${fallbackOff ? 'selected' : ''}>No credits</option></select>
           ${fallbackOff ? '' : `<div class="input-group input-group-sm mt-1"><input type="number" class="form-control" min="50" max="99" data-fallback-percent value="${percent}"><span class="input-group-text">%</span></div>`}
         </div>
       </div>
-      ${fields}
     </div>
-    <div class="im-card">
-      <div class="im-field d-block" id="im-webhooks">
-        <strong>Plex Pass and webhooks</strong>
-        <div class="mt-2">${webhookPanel()}</div>
-        ${state.webhook?.plexPass && !state.webhook.error ? `<div class="d-flex gap-2 mt-2">
-          <button class="btn btn-sm btn-im" data-action="apply-webhooks">Apply changes</button>
-          <button class="btn btn-sm btn-outline-secondary" data-action="recheck-webhooks">Check again</button>
-          ${state.webhook.registered ? `<button class="btn btn-sm ${state.confirming === 'remove-webhook' ? 'btn-danger' : 'btn-outline-danger'} ms-auto" data-action="remove-webhook">${state.confirming === 'remove-webhook' ? 'Tap again to remove' : 'Remove Intermission webhook'}</button>` : ''}
-        </div>` : ''}
-      </div>
-${state.status.plexPass === false ? '' : `      <div class="im-field">
-        <label for="im-webhook"><strong>Receive Plex webhooks</strong><small>Needs Plex Pass. Makes play detection instant.</small></label>
+
+    <div class="im-card" id="im-webhooks">
+      <strong>Plex Pass and webhooks</strong>
+      <div class="mt-2">${webhookPanel()}</div>
+      ${state.webhook?.plexPass && !state.webhook.error ? `<div class="d-flex flex-wrap gap-2 mt-2">
+        <button class="btn btn-sm btn-im" data-action="apply-webhooks">Apply changes</button>
+        <button class="btn btn-sm btn-outline-secondary" data-action="recheck-webhooks">Check again</button>
+        ${state.webhook.registered ? `<button class="btn btn-sm ${state.confirming === 'remove-webhook' ? 'btn-danger' : 'btn-outline-danger'} ms-auto" data-action="remove-webhook">${state.confirming === 'remove-webhook' ? 'Tap again to remove' : 'Remove Intermission webhook'}</button>` : ''}
+      </div>` : ''}
+    </div>
+    ${state.status.plexPass === false ? '' : collapsible('webhook-options', 'Webhook options', 'Port, address, and turning webhooks off.', `
+      <div class="im-field">
+        <label for="im-webhook"><strong>Receive Plex webhooks</strong><small>Makes play detection instant and adds the Plex Pass events.</small></label>
         <div class="form-check form-switch"><input id="im-webhook" class="form-check-input" type="checkbox" data-webhook-enabled ${webhook.enabled === false ? '' : 'checked'}></div>
       </div>
       <div class="im-field">
@@ -763,27 +872,19 @@ ${state.status.plexPass === false ? '' : `      <div class="im-field">
         <input id="im-port" type="number" class="form-control form-control-sm" min="1024" max="65535" data-webhook-port value="${webhook.port ?? DEFAULT_WEBHOOK_PORT}">
       </div>
       <div class="im-field">
-        <label for="im-address"><strong>Homebridge address for Plex</strong><small>Leave empty to detect it. Example: http://10.0.0.5:32550</small></label>
+        <label for="im-address"><strong>Homebridge address for Plex</strong><small>Leave empty to detect it. Set it if Plex is on another network. Example: http://10.0.0.5:32550</small></label>
         <input id="im-address" type="url" class="form-control form-control-sm" data-webhook-address placeholder="Automatic" value="${escape(webhook.advertisedUrl ?? '')}">
-      </div>
-`}      <div class="im-field">
+      </div>`)}
+
+    ${collapsible('advanced', 'Advanced', 'Timing, logging and commands. These rarely need changing.', `
+      ${fields}
+      <div class="im-field">
         <label for="im-detailed"><strong>Detailed logging</strong><small>Logs every event and timer decision. Turn on when reporting a problem.</small></label>
         <div class="form-check form-switch"><input id="im-detailed" class="form-check-input" type="checkbox" data-detailed ${state.config.detailedLogging ? 'checked' : ''}></div>
       </div>
-    </div>
-    <div class="d-flex flex-wrap gap-2">
-      <button class="btn ${state.confirming === 'reset-advanced' ? 'btn-danger' : 'btn-outline-secondary'}" data-action="reset-advanced">${state.confirming === 'reset-advanced' ? 'Tap again to reset these settings' : 'Reset advanced settings'}</button>
-      <button class="btn btn-outline-secondary" data-action="redo-setup">Change servers, players and libraries</button>
-      <button class="btn ${state.confirming === 'signout' ? 'btn-danger' : 'btn-outline-danger'} ms-auto" data-action="signout">${state.confirming === 'signout' ? 'Tap again to sign out' : 'Sign out of Plex'}</button>
-    </div>
-    ${state.confirming === 'reset-advanced' ? '<p class="im-hint">Resets only the settings on this page. Sensors, sign-in and webhooks stay as they are.</p>' : ''}
-    <div class="im-card mt-3 im-danger-zone">
-      <strong>Reset Intermission</strong>
-      <p class="small mb-2 mt-1">Starts over as if freshly installed: signs out of Plex, removes the Intermission webhook from your Plex account, and deletes all sensors and settings. Removed sensors disappear from Apple Home, and automations that use them stop working. Homebridge then asks to restart, and setup starts again here.</p>
-      <button class="btn btn-sm ${state.confirming === 'reset-plugin' ? 'btn-danger' : 'btn-outline-danger'}" data-action="reset-plugin">${state.confirming === 'reset-plugin' ? 'Tap again to reset everything' : 'Reset Intermission…'}</button>
-      ${state.confirming === 'reset-plugin' ? '<button class="btn btn-sm btn-outline-secondary ms-2" data-action="cancel-confirm">Cancel</button>' : ''}
-    </div>
-    <div class="im-card mt-3">
+      ${commandsSection()}`)}
+
+    <div class="im-card">
       <div class="d-flex align-items-center mb-2"><strong>About this setup</strong>
         <span class="ms-auto d-flex gap-1">
           <button class="btn btn-sm btn-outline-secondary" data-action="load-report">${state.report ? 'Refresh' : 'Show'}</button>
@@ -791,7 +892,20 @@ ${state.status.plexPass === false ? '' : `      <div class="im-field">
         </span></div>
       <p class="im-hint mb-2">Server, Plex Pass, libraries and settings, for troubleshooting. Contains no sign-in token. Public addresses are hidden.</p>
       ${state.report ? `<textarea class="form-control im-report" readonly rows="14">${escape(state.report)}</textarea>` : ''}
-    </div>`;
+    </div>
+
+    ${collapsible('reset', 'Reset', '', `
+      <div class="im-field d-block">
+        <strong>Reset all settings</strong>
+        <p class="small mb-2 mt-1">Puts every setting on this page back to its default: credits, webhook options, timing and logging. Your sensors, commands, sign-in and webhooks stay.</p>
+        <button class="btn btn-sm ${state.confirming === 'reset-advanced' ? 'btn-danger' : 'btn-outline-secondary'}" data-action="reset-advanced">${state.confirming === 'reset-advanced' ? 'Tap again to reset all settings' : 'Reset all settings'}</button>
+      </div>
+      <div class="im-field d-block">
+        <strong>Reset Intermission</strong>
+        <p class="small mb-2 mt-1">Starts over as if freshly installed: signs out of Plex, removes the Intermission webhook from your Plex account, and deletes all sensors, commands and settings. Removed sensors disappear from Apple Home, and automations that use them stop working. Homebridge then asks to restart, and setup starts again here.</p>
+        <button class="btn btn-sm ${state.confirming === 'reset-plugin' ? 'btn-danger' : 'btn-outline-danger'}" data-action="reset-plugin">${state.confirming === 'reset-plugin' ? 'Tap again to reset everything' : 'Reset Intermission…'}</button>
+        ${state.confirming === 'reset-plugin' ? '<button class="btn btn-sm btn-outline-secondary ms-2" data-action="cancel-confirm">Cancel</button>' : ''}
+      </div>`)}`;
 }
 
 // Footer icons, the same ones as the Gouly plugin.
@@ -857,6 +971,7 @@ function setType(sensor, type) {
   sensor.type = type;
   if (SENSOR_TYPES[type].state && !wasState) {
     sensor.state = 'playing';
+    sensor.except = ['credits'];
     delete sensor.events;
   } else if (!SENSOR_TYPES[type].state && wasState) {
     sensor.events = ['play'];
@@ -907,7 +1022,7 @@ const actions = {
     toggleBy(state.selection.libraries, libraryRef(srv, srv.libraries.find((l) => l.key === el.dataset.id)), 'key');
     render();
   },
-  'refresh-choose': () => loadDiscovery('choose'),
+  'refresh-choose': () => loadDiscovery('choose', { keepSelection: true }),
   'to-template': () => (state.config.sensors.length > 0 ? finishSetup() : go('template')),
   'back-choose': () => go('choose'),
   'pick-template': (el) => { state.template = el.dataset.id; render(); },
@@ -941,11 +1056,60 @@ const actions = {
     return changed();
   }),
   'cancel-confirm': () => { state.confirming = undefined; render(); },
+  'toggle-open': (el) => {
+    state.open = { ...state.open, [el.dataset.id]: !state.open?.[el.dataset.id] };
+    render();
+  },
+  'add-command': () => {
+    const commands = state.config.commands ?? { enabled: true, list: [] };
+    commands.list = [...(commands.list ?? []), { id: sensorId().replace('s-', 'c-'), name: '', command: '' }];
+    state.config.commands = commands;
+    return changed();
+  },
+  'remove-command': (el) => confirmThen(`command:${el.dataset.id}`, () => {
+    const id = el.dataset.id;
+    state.config.commands.list = state.config.commands.list.filter((c) => c.id !== id);
+    for (const sensor of state.config.sensors) {
+      for (const key of ['on', 'off', 'press']) {
+        if (sensor.run?.[key]) {
+          sensor.run[key] = sensor.run[key].filter((c) => c !== id);
+        }
+      }
+    }
+    return changed();
+  }),
+  'test-command': async (el) => {
+    const command = state.config.commands.list.find((c) => c.id === el.dataset.id);
+    state.commandTests = { ...state.commandTests, [command.id]: { running: true } };
+    render();
+    const result = await request('/commands/test', { name: command.name, command: command.command });
+    state.commandTests = { ...state.commandTests, [command.id]: result };
+    render();
+  },
+  'toggle-run': (el) => {
+    const sensor = editingSensor();
+    sensor.run ??= { on: [], off: [], press: [] };
+    sensor.run[el.dataset.when] ??= [];
+    toggle(sensor.run[el.dataset.when], el.dataset.id);
+    return changed();
+  },
+  'toggle-except': (el) => {
+    const sensor = editingSensor();
+    sensor.except ??= [];
+    toggle(sensor.except, el.dataset.id);
+    return changed();
+  },
+  'open-credits': () => {
+    state.tab = 'advanced';
+    render();
+    document.getElementById('im-first')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  },
   'toggle-event': (el) => { toggle(editingSensor().events, el.dataset.id); return changed(); },
   'toggle-filter-players': (el) => { toggle(editingSensor().filters.players, el.dataset.id); return changed(); },
   'toggle-filter-users': (el) => { toggle(editingSensor().filters.users, el.dataset.id); return changed(); },
   'toggle-filter-libraries': (el) => { toggle(editingSensor().filters.libraries, el.dataset.id); return changed(); },
   'toggle-filter-mediaTypes': (el) => { toggle(editingSensor().filters.mediaTypes, el.dataset.id); return changed(); },
+  reload: () => { location.reload(); },
   'bug-help': () => { state.bugHelp = !state.bugHelp; render(); },
   'open-webhooks': () => {
     state.tab = 'advanced';
@@ -962,6 +1126,13 @@ const actions = {
     await loadDiscovery('choose');
   },
   'webhooks-skip': () => loadDiscovery('choose'),
+  'cancel-setup': () => {
+    state.setupServers = undefined;
+    state.selection = undefined;
+    state.discovery = undefined;
+    go('main');
+    void loadMain();
+  },
   'players-all': () => { state.selection.allPlayers = true; state.selection.players = []; render(); },
   'libraries-all': () => { state.selection.allLibraries = true; state.selection.libraries = []; render(); },
   'filter-all': (el) => { editingSensor().filters[el.dataset.id] = []; return changed(); },
@@ -977,7 +1148,7 @@ const actions = {
     delete state.config.timing;
     delete state.config.webhook;
     delete state.config.detailedLogging;
-    homebridge.toast.success('Advanced settings are back to their defaults. Press Save to keep them.');
+    homebridge.toast.success('All settings are back to their defaults. Press Save to keep them.');
     return changed();
   }),
   'reset-plugin': () => confirmThen('reset-plugin', () => busy('Resetting Intermission…', async () => {
@@ -1033,6 +1204,9 @@ root.addEventListener('change', (event) => {
       sensor.name = el.value.trim() || sensor.name;
     } else if (field === 'state') {
       sensor.state = el.value;
+      if (!CAN_EXCEPT.includes(sensor.state)) {
+        sensor.except = [];
+      }
     }
     void changed();
     return;
@@ -1070,6 +1244,15 @@ root.addEventListener('change', (event) => {
     config.webhook = { ...config.webhook, port: port >= 1024 && port <= 65535 ? port : DEFAULT_WEBHOOK_PORT };
   } else if (el.hasAttribute('data-webhook-address')) {
     config.webhook = { ...config.webhook, advertisedUrl: el.value.trim() || undefined };
+  } else if (el.hasAttribute('data-commands-enabled')) {
+    config.commands = { list: [], ...config.commands, enabled: el.checked };
+  } else if (el.dataset.commandName !== undefined || el.dataset.commandLine !== undefined) {
+    const command = config.commands.list.find((c) => c.id === (el.dataset.commandName ?? el.dataset.commandLine));
+    if (el.dataset.commandName !== undefined) {
+      command.name = el.value.trim();
+    } else {
+      command.command = el.value.trim();
+    }
   } else if (el.hasAttribute('data-detailed')) {
     config.detailedLogging = el.checked;
   } else {

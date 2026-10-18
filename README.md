@@ -36,7 +36,7 @@ webhooks alone. Intermission:
 - **Every Plex event:** play, pause, resume, stop, scrobble, rate, new library items, On Deck and server-owner events, plus derived events such as credits start and intro start
 - **Sensors you design:** HomeKit occupancy, motion or contact sensors for states, and buttons for one-off events, filtered by player, user, library and media type
 - **Sign in with Plex:** players, users and libraries are listed for you to pick; no token hunting
-- **Three suggested setups:** Simple, Credits-Aware (with mid-credits scenes) and Every State, or build your own
+- **Three suggested setups:** Simple, Simple + Credits (with mid-credits scenes) and Every State, or build your own
 - **One-click webhook setup:** shows your current Plex webhooks and asks before changing anything
 - **Home recipes:** step-by-step Home app automations, including gentle fades that differ for credits and pause
 - **Live view and debug report** for troubleshooting

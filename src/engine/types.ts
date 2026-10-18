@@ -53,7 +53,7 @@ export interface WebhookEvent {
   viewOffset?: number;
 }
 
-export type EngineEventType = 'play' | 'pause' | 'resume' | 'stop' | 'seek' | 'credits.start' | 'credits.cancel';
+export type EngineEventType = 'play' | 'pause' | 'resume' | 'stop' | 'seek' | 'credits.start' | 'credits.cancel' | 'intro.start' | 'intro.end';
 
 export interface EngineEvent {
   type: EngineEventType;
@@ -69,6 +69,8 @@ export interface PlayerSnapshot {
   playerId: string;
   activity: PlayerActivity;
   inCredits: boolean;
+  /** Inside an intro marker (Plex finds intros on servers with Plex Pass). */
+  inIntro: boolean;
   positionMs: number;
   session?: SessionInfo;
 }

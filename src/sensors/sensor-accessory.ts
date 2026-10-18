@@ -48,9 +48,10 @@ export class SensorAccessory {
     return this.config.id;
   }
 
-  setActive(active: boolean, force = false): void {
+  /** Returns true when the state changed. */
+  setActive(active: boolean, force = false): boolean {
     if (this.config.type === 'button' || (active === this.active && !force)) {
-      return;
+      return false;
     }
     this.active = active;
     this.accessory.context.active = active;
@@ -70,6 +71,7 @@ export class SensorAccessory {
           : Characteristic.ContactSensorState.CONTACT_DETECTED);
         break;
     }
+    return true;
   }
 
   press(): void {

@@ -20,17 +20,33 @@ test('empty filters allow everything; set filters need a matching value', () => 
   assert.equal(matchesFilters({ ...none, libraries: ['srv-b/1'] }, { serverId: 'srv-a', media }), false, 'same section on another server');
 });
 
-test('state conditions', () => {
-  const snapshot = (activity, inCredits = false) => ({ playerId: 'A', activity, inCredits, positionMs: 0 });
-  assert.equal(stateHolds('playing', snapshot('playing')), true);
-  assert.equal(stateHolds('playing', snapshot('playing', true)), false);
-  assert.equal(stateHolds('playing-any', snapshot('playing', true)), true);
+test('state conditions, with and without the credits and intro', () => {
+  const snapshot = (activity, inCredits = false, inIntro = false) => ({ playerId: 'A', activity, inCredits, inIntro, positionMs: 0 });
+  assert.equal(stateHolds('playing', snapshot('playing', true)), true, 'Playing includes the credits by default');
+  assert.equal(stateHolds('playing', snapshot('playing', true), ['credits']), false, 'except during the credits');
+  assert.equal(stateHolds('playing', snapshot('playing', false, true), ['credits']), true, 'the intro still counts');
+  assert.equal(stateHolds('playing', snapshot('playing', false, true), ['credits', 'intro']), false);
   assert.equal(stateHolds('paused', snapshot('paused')), true);
-  assert.equal(stateHolds('paused', snapshot('paused', true)), false, 'a pause in the credits stays credits');
+  assert.equal(stateHolds('paused', snapshot('paused', true), ['credits']), false, 'a pause in the credits stays credits');
   assert.equal(stateHolds('credits', snapshot('paused', true)), true);
   assert.equal(stateHolds('credits', snapshot('idle', true)), false);
+  assert.equal(stateHolds('intro', snapshot('playing', false, true)), true);
   assert.equal(stateHolds('active', snapshot('paused')), true);
   assert.equal(stateHolds('active', snapshot('idle')), false);
+  assert.equal(stateHolds('idle', snapshot('idle')), true);
+});
+
+test('older configs keep their meaning', async () => {
+  const { parseConfig } = await import('../dist/config.js');
+  const log = { debug() {}, info() {}, warn() {}, error() {} };
+  const sensors = parseConfig({ sensors: [
+    { id: 'a', name: 'a', type: 'occupancy', state: 'playing-any' },
+    { id: 'b', name: 'b', type: 'occupancy', state: 'playing' },
+    { id: 'c', name: 'c', type: 'occupancy', state: 'paused' },
+    { id: 'd', name: 'd', type: 'occupancy', state: 'playing', except: [] },
+    { id: 'e', name: 'e', type: 'occupancy', state: 'credits', except: ['credits'] },
+  ] }, log).sensors;
+  assert.deepEqual(sensors.map((s) => `${s.state}:${s.except.join('+')}`), ['playing:', 'playing:credits', 'paused:credits', 'playing:', 'credits:']);
 });
 
 function accessory(config, existing) {

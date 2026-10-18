@@ -49,6 +49,10 @@ interface PlayerRecord {
   /** True when the latest position report was a jump backwards. */
   jumpedBack: boolean;
   inCredits: boolean;
+  /** Intro markers, empty when there are none. */
+  intro: CreditsRange[];
+  inIntro: boolean;
+  introTimer?: TimerHandle;
   creditsTimer?: TimerHandle;
   pauseTimer?: TimerHandle;
   stopTimer?: TimerHandle;
@@ -141,6 +145,7 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
       playerId,
       activity: player?.ignored ? 'idle' : (player?.activity ?? 'idle'),
       inCredits: player?.inCredits ?? false,
+      inIntro: player?.inIntro ?? false,
       positionMs: player ? Math.round(this.position(player)) : 0,
       session: player?.session,
     };
@@ -175,6 +180,8 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
         credits: undefined,
         jumpedBack: false,
         inCredits: false,
+        intro: [],
+        inIntro: false,
       };
       this.players.set(id, player);
     }
@@ -204,6 +211,8 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
     player.credits = undefined;
     player.jumpedBack = false;
     player.inCredits = false;
+    player.intro = [];
+    player.inIntro = false;
   }
 
   private resolve(player: PlayerRecord, known?: SessionInfo): void {
@@ -260,10 +269,12 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
     }
     const media = player.session?.media;
     player.credits = credited ? creditsRanges(markers, media?.durationMs, this.settings, media?.type) : [];
+    player.intro = markers.filter((marker) => marker.type === 'intro' && marker.endMs > marker.startMs)
+      .map((marker) => ({ startMs: marker.startMs, endMs: marker.endMs }));
     this.deps.log.debug('%s: credits %s', label(player), player.credits.length === 0
       ? 'none'
       : player.credits.map((r) => `${formatTime(r.startMs)}-${r.endMs === Infinity ? 'end' : formatTime(r.endMs)}`).join(', '));
-    this.scheduleCredits(player);
+    this.scheduleMarkers(player);
   }
 
   /** Records a reported position, emitting `seek` when it is far from where playback should be. */
@@ -317,7 +328,7 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
         }, debounce);
       }
     }
-    this.scheduleCredits(player);
+    this.scheduleMarkers(player);
   }
 
   private enterPaused(player: PlayerRecord): void {
@@ -328,9 +339,11 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
   private stop(player: PlayerRecord): void {
     player.raw = 'stopped';
     this.clearCreditsTimer(player);
-    if (player.pauseTimer !== undefined) {
-      this.deps.clock.clearTimeout(player.pauseTimer);
-      player.pauseTimer = undefined;
+    for (const key of ['pauseTimer', 'introTimer'] as const) {
+      if (player[key] !== undefined) {
+        this.deps.clock.clearTimeout(player[key]);
+        player[key] = undefined;
+      }
     }
     if (player.stopTimer !== undefined || player.ratingKey === undefined) {
       return;
@@ -363,6 +376,41 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
    * Small rewinds (Plex rewinds a little on resume) never change the credits state: a rewind that
    * lands within the re-arm distance of the credits it left keeps it.
    */
+  private scheduleMarkers(player: PlayerRecord): void {
+    this.scheduleCredits(player);
+    this.scheduleIntro(player);
+  }
+
+  /** Keeps `inIntro` in step with the position, with a timer for the next intro boundary. */
+  private scheduleIntro(player: PlayerRecord): void {
+    if (player.introTimer !== undefined) {
+      this.deps.clock.clearTimeout(player.introTimer);
+      player.introTimer = undefined;
+    }
+    if (!player.ready || player.ignored || !player.positionKnown || player.intro.length === 0) {
+      return;
+    }
+    const position = this.position(player);
+    const inside = player.intro.find((range) => position >= range.startMs - TIMER_TOLERANCE_MS && position < range.endMs);
+    if (inside && !player.inIntro && player.raw !== 'stopped') {
+      player.inIntro = true;
+      this.emitEvent(player, 'intro.start');
+    } else if (!inside && player.inIntro) {
+      player.inIntro = false;
+      this.emitEvent(player, 'intro.end');
+    }
+    if (player.raw !== 'playing') {
+      return;
+    }
+    const next = inside ? inside.endMs : player.intro.find((range) => range.startMs > position)?.startMs;
+    if (next !== undefined) {
+      player.introTimer = this.deps.clock.setTimeout(() => {
+        player.introTimer = undefined;
+        this.scheduleIntro(player);
+      }, Math.max(0, next - position));
+    }
+  }
+
   private scheduleCredits(player: PlayerRecord): void {
     this.clearCreditsTimer(player);
     const ranges = player.credits;
@@ -438,7 +486,7 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
 
   private clearTimers(player: PlayerRecord): void {
     this.clearCreditsTimer(player);
-    for (const key of ['pauseTimer', 'stopTimer'] as const) {
+    for (const key of ['pauseTimer', 'stopTimer', 'introTimer'] as const) {
       if (player[key] !== undefined) {
         this.deps.clock.clearTimeout(player[key]);
         player[key] = undefined;

@@ -1,4 +1,4 @@
-import type { SensorFilters, StateCondition } from '../config.js';
+import type { Exception, SensorFilters, StateCondition } from '../config.js';
 import type { MediaInfo, PlayerSnapshot, SessionInfo } from '../engine/types.js';
 
 /** What an event or session offers to match against. Missing fields fail any filter on them. */
@@ -27,19 +27,19 @@ export function matchesFilters(filters: SensorFilters, context: MatchContext): b
     && allows(filters.mediaTypes, context.media?.type);
 }
 
-export function stateHolds(condition: StateCondition, snapshot: PlayerSnapshot): boolean {
+export function stateHolds(condition: StateCondition, snapshot: PlayerSnapshot, except: readonly Exception[] = []): boolean {
+  const excluded = (except.includes('credits') && snapshot.inCredits) || (except.includes('intro') && snapshot.inIntro);
   switch (condition) {
     case 'playing':
-      return snapshot.activity === 'playing' && !snapshot.inCredits;
-    case 'playing-any':
-      return snapshot.activity === 'playing';
+      return snapshot.activity === 'playing' && !excluded;
     case 'paused':
-      // Pausing during the credits stays "credits", so exactly one of playing, paused, credits and idle holds.
-      return snapshot.activity === 'paused' && !snapshot.inCredits;
+      return snapshot.activity === 'paused' && !excluded;
+    case 'active':
+      return snapshot.activity !== 'idle' && !excluded;
     case 'credits':
       return snapshot.activity !== 'idle' && snapshot.inCredits;
-    case 'active':
-      return snapshot.activity !== 'idle';
+    case 'intro':
+      return snapshot.activity !== 'idle' && snapshot.inIntro;
     case 'idle':
       return snapshot.activity === 'idle';
   }

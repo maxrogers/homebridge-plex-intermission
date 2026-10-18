@@ -42,7 +42,7 @@ test('Every State produces sensors the plugin accepts', () => {
   const config = parseConfig({ sensors }, { ...silentLog, warn: (...args) => warnings.push(args) });
   assert.equal(warnings.length, 0);
   assert.deepEqual(config.sensors.map((s) => s.name), ['Media Playing', 'Media Paused', 'Credits Rolling', 'Nothing Playing']);
-  assert.deepEqual(config.sensors.map((s) => `${s.type}:${s.state}`), ['occupancy:playing', 'occupancy:paused', 'occupancy:credits', 'occupancy:idle'], 'all state sensors');
+  assert.deepEqual(config.sensors.map((s) => `${s.type}:${s.state}:${s.except.join()}`), ['occupancy:playing:credits', 'occupancy:paused:credits', 'occupancy:credits:', 'occupancy:idle:'], 'all state sensors');
   assert.equal(new Set(config.sensors.map((s) => s.id)).size, 4);
   assert.deepEqual(config.sensors[0].filters, { players: ['ATV'], users: [], libraries: ['a/1', 'a/2', 'b/1'], mediaTypes: [] });
   const some = presetSensors('states', { ...defaultSelection(discovery), allUsers: false, users: ['Steve'] });
@@ -61,7 +61,7 @@ test('new sensors are valid', () => {
 test('summaries read as a sentence', () => {
   const selection = defaultSelection(discovery);
   const [playing, , credits] = presetSensors('states', selection);
-  assert.equal(summarize(playing, selection), 'On while playing, before the credits, on Living Room, for Movies, TV Shows or 1 more, by anyone.');
+  assert.equal(summarize(playing, selection), 'On while playing, except during the credits, on Living Room, for Movies, TV Shows or 1 more, by anyone.');
   assert.equal(summarize({ ...credits, filters: { players: [], users: ['steve'], libraries: [], mediaTypes: ['movie'] } }, selection),
     'On while in the credits, on any player, for Movies and other videos, by steve.');
   assert.equal(summarize({ type: 'button', events: ['credits.start'], filters: { players: [], users: [], libraries: [], mediaTypes: [] } }, selection),
@@ -99,7 +99,50 @@ test('the single-sensor presets differ only in how they treat the credits', () =
   assert.deepEqual(PRESETS.map((p) => p.id), ['simple', 'credits', 'states']);
   const simple = parseConfig({ sensors: presetSensors('simple', defaultSelection(discovery)) }, silentLog).sensors;
   const credits = parseConfig({ sensors: presetSensors('credits', defaultSelection(discovery)) }, silentLog).sensors;
-  assert.deepEqual(simple.map((s) => s.state), ['playing-any']);
-  assert.deepEqual(credits.map((s) => s.state), ['playing']);
+  assert.deepEqual(simple.map((s) => `${s.state}:${s.except.join()}`), ['playing:']);
+  assert.deepEqual(credits.map((s) => `${s.state}:${s.except.join()}`), ['playing:credits']);
   assert.equal(PRESETS.find((p) => p.recommended).id, 'credits');
+});
+
+test('changing servers keeps choices and sensors consistent', async () => {
+  const { reconcileSelection, reconcileSensors, libraryRef } = await import('../homebridge-ui/public/model.js');
+  const lib = (server, id, title, kind) => ({ id, key: `${server}/${id}`, title, type: kind === 'show' ? 'show' : 'movie', kind });
+  const serverA = { id: 'a', name: 'Unraid', libraries: [lib('a', '1', 'Movies', 'movie'), lib('a', '2', 'TV', 'show'), lib('a', '3', 'Music', 'music')] };
+  const serverB = { id: 'b', name: 'Cabin', libraries: [lib('b', '1', 'Kids Movies', 'movie'), lib('b', '4', 'Tunes', 'music')] };
+  const both = { players: [], users: [], servers: [serverA, serverB] };
+  const onlyA = { players: [], users: [], servers: [serverA] };
+  const onlyB = { players: [], users: [], servers: [serverB] };
+
+  // First setup with both servers: Movies and TV on both are chosen.
+  const first = defaultSelection(both);
+  assert.deepEqual(first.libraries.map((l) => l.key), ['a/1', 'a/2', 'b/1']);
+
+  // Dropping Cabin removes its libraries from the choices.
+  const dropped = reconcileSelection(first, onlyA, ['a', 'b']);
+  assert.deepEqual(dropped.libraries.map((l) => l.key), ['a/1', 'a/2']);
+
+  // Adding Cabin back chooses its Movies and TV, and keeps a manual choice on Unraid.
+  const manual = { ...dropped, libraries: [...dropped.libraries, libraryRef(serverA, serverA.libraries[2])] };
+  const readded = reconcileSelection(manual, both, ['a']);
+  assert.deepEqual(readded.libraries.map((l) => l.key), ['a/1', 'a/2', 'a/3', 'b/1']);
+
+  // "All libraries" stays all.
+  assert.deepEqual(reconcileSelection({ ...first, allLibraries: true }, onlyA, ['a', 'b']).libraries, []);
+
+  const known = [...serverA.libraries, ...serverB.libraries].map((l) => ({ key: l.key, kind: l.kind }));
+  const sensors = [
+    { id: 'tv', filters: { libraries: ['a/1', 'a/2'] } },
+    { id: 'music', filters: { libraries: ['a/3'] } },
+    { id: 'all', filters: { libraries: [] } },
+    { id: 'cabin', filters: { libraries: ['b/1'] } },
+  ];
+  // Adding Cabin: each sensor gains Cabin's libraries of the kinds it already uses.
+  const grown = reconcileSensors(sensors, both, ['a'], known);
+  assert.deepEqual(grown.map((s) => s.filters.libraries), [['a/1', 'a/2', 'b/1'], ['a/3', 'b/4'], [], ['b/1']]);
+  // Removing Cabin: its libraries go; a sensor that only used Cabin gets Unraid's libraries of the same kind, never "all".
+  const shrunk = reconcileSensors(grown, onlyA, ['a', 'b'], known);
+  assert.deepEqual(shrunk.map((s) => s.filters.libraries), [['a/1', 'a/2'], ['a/3'], [], ['a/1']]);
+  // Switching entirely to Cabin: a TV-only sensor has no TV there, so it falls back to Movies and TV.
+  const switched = reconcileSensors([{ id: 'x', filters: { libraries: ['a/2'] } }], onlyB, ['a'], known);
+  assert.deepEqual(switched[0].filters.libraries, ['b/1']);
 });
