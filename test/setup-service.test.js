@@ -42,7 +42,11 @@ async function fakePlex(t, { plexPass = true, webhooks = [], webhooksEnabled = f
     }
     if (path === '/api/v2/user/webhooks' && request.method === 'POST') {
       state.posts++;
-      state.webhooks = new URLSearchParams(body).getAll('urls[]');
+      const urls = new URLSearchParams(body).getAll('urls[]');
+      // Like plex.tv: a POST without any urls[] changes nothing; urls[]= (empty) clears the list.
+      if (urls.length > 0) {
+        state.webhooks = urls.filter(Boolean);
+      }
       return response.writeHead(201).end();
     }
     if (path === '/:/prefs' && request.method === 'GET') {
@@ -101,6 +105,16 @@ test('adds the webhook, keeps the others, replaces an old address and turns the 
   const removed = await service.removeWebhook({ servers });
   assert.equal(removed.registered, false);
   assert.deepEqual(state.webhooks, ['https://other.example/hook']);
+});
+
+test('removing the webhook when it is the only one on the account clears the list', async (t) => {
+  const { service, servers, state } = await fakePlex(t);
+  state.webhooks = [];
+  await service.addWebhook({ servers });
+  assert.equal(state.webhooks.length, 1);
+  const removed = await service.removeWebhook({ servers });
+  assert.equal(removed.registered, false);
+  assert.deepEqual(state.webhooks, []);
 });
 
 test('without Plex Pass the webhook is not offered', async (t) => {
@@ -184,4 +198,60 @@ test('reset removes the webhook, the sign-in and the Plex Pass history', async (
   assert.deepEqual(state.webhooks, ['https://other.example/hook']);
   assert.equal(await storage.readCredentials(), undefined);
   assert.equal(await storage.readPlexPass(), undefined);
+});
+
+test('diagnostics: setup, sensors and the kept log, without secrets, with names replaced', async (t) => {
+  const { service, storage, servers, secret } = await fakePlex(t);
+  const { DiagnosticLog, title, player, person } = await import('../dist/diagnostics.js');
+  const log = new DiagnosticLog(storage.directory, 1_000_000, 0);
+  const plain = [];
+  const wrapped = log.wrap({ debug: (...a) => plain.push(a), info: (...a) => plain.push(a), warn() {}, error() {} });
+  wrapped.info('%s: on (%s, %s)', 'Media Playing', title('Dune: Part Two'), player('Living Room'));
+  wrapped.debug('Request to http://73.14.2.9:32400/library?X-Plex-Token=abcdef123456 for %s', person('Jen'));
+  wrapped.debug('Webhook path /%s', secret);
+  await log.flush();
+  assert.deepEqual(plain[0], ['%s: on (%s, %s)', 'Media Playing', 'Dune: Part Two', 'Living Room'], 'Homebridge sees plain names');
+
+  const config = {
+    setupId: 'x',
+    selection: { players: [{ id: 'ATV', name: 'Living Room' }], libraries: [{ key: 'srv/1', title: 'Movies' }] },
+    sensors: [{ id: 's', name: 'Media Playing', type: 'occupancy', state: 'playing', except: ['credits'], filters: { players: ['ATV'], users: ['Jen'], libraries: ['srv/1'] }, run: { on: ['c'] } }],
+    commands: { enabled: true, list: [{ id: 'c', name: 'Projector Control', command: 'curl http://10.0.0.9/?key=topsecretkey' }] },
+  };
+  const text = await service.diagnostics({ config, servers });
+  assert.match(text, /== Sensors ==/);
+  assert.match(text, /players: Player 1/);
+  assert.match(text, /people: Person \d/);
+  assert.match(text, /libraries: Movies/);
+  assert.match(text, /on: Projector Control/);
+  assert.match(text, /Projector Control: \(command line hidden\)/);
+  assert.match(text, /info {2}Media Playing: on \(Title 1, Player 1\)/);
+  assert.doesNotMatch(text, /Dune|Living Room|Jen|topsecretkey/);
+  assert.doesNotMatch(text, /abcdef123456/, 'tokens never appear');
+  assert.ok(!text.includes(secret), 'the webhook key never appears');
+  assert.match(text, /x\.x\.x\.x:32400/, 'public addresses are hidden');
+  assert.doesNotMatch(text, /⁣/, 'no markers left');
+
+  const named = await service.diagnostics({ config, servers, includeNames: true });
+  assert.match(named, /Dune: Part Two/);
+  assert.ok(!named.includes(secret));
+});
+
+test('the kept log rolls over and keeps the newest lines', async (t) => {
+  const { mkdtemp, rm, readdir } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { DiagnosticLog, readDiagnostics } = await import('../dist/diagnostics.js');
+  const dir = await mkdtemp(join(tmpdir(), 'im-diag-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const log = new DiagnosticLog(dir, 2_000, 0);
+  for (let i = 0; i < 200; i++) {
+    log.add('debug', 'line %d', [i]);
+    await log.flush();
+  }
+  const files = (await readdir(dir)).sort();
+  assert.deepEqual(files, ['diagnostics.1.log', 'diagnostics.log']);
+  const lines = await readDiagnostics(dir);
+  assert.match(lines.at(-1), /line 199$/);
+  assert.ok(lines.length < 200, 'old lines are dropped');
 });

@@ -6,6 +6,7 @@ import { DEFAULT_WEBHOOK_PORT } from './config.js';
 import { discover, type Discovery } from './plex/discovery.js';
 import { connectionCandidates, type PlexPin, PlexTv } from './plex/plex-tv.js';
 import { PlexHttpError, PlexServer, type PlexServerPrefs } from './plex/server.js';
+import { commandLine, person, player, readDiagnostics, redact, scrubSecrets, unmark } from './diagnostics.js';
 import type { MediaFacts } from './plex/media-facts.js';
 import { configFingerprint } from './runtime.js';
 import { serverToken, type Credentials, type Storage } from './storage.js';
@@ -51,6 +52,13 @@ export interface WebhookStatus {
   others: string[];
   /** Servers whose "Webhooks" setting is off. */
   disabledOn: string[];
+}
+
+export interface ReportInput {
+  config: Record<string, unknown>;
+  servers: ServerRef[];
+  homebridgeVersion?: string;
+  nodeVersion?: string;
 }
 
 export interface SetupServiceOptions {
@@ -354,7 +362,11 @@ export class SetupService {
 
   async removeWebhook(options: WebhookOptions): Promise<WebhookStatus> {
     const before = await this.webhookStatus(options);
-    return this.updateWebhooks(options, { add: false, remove: [...before.stale, ...(before.url ? [before.url] : [])] });
+    const after = await this.updateWebhooks(options, { add: false, remove: [...before.stale, ...(before.url ? [before.url] : [])] });
+    if (after.registered || after.stale.length > 0) {
+      throw new SetupError('Plex kept the Intermission webhook. Try again, or remove it in Plex: Settings, Webhooks.', 502);
+    }
+    return after;
   }
 
   /**
@@ -389,7 +401,72 @@ export class SetupService {
   }
 
   /** A plain-text summary for the Advanced page and bug reports. Contains no tokens or webhook secret. */
-  async report(input: { config: Record<string, unknown>; servers: ServerRef[]; homebridgeVersion?: string; nodeVersion?: string }): Promise<string> {
+  async report(input: ReportInput): Promise<string> {
+    return unmark(await this.setupReport(input));
+  }
+
+  /**
+   * Everything needed to look into a problem, as one text file: the setup report, every sensor,
+   * and the recent detailed log the plugin keeps. Never contains the Plex sign-in, server tokens or
+   * the webhook key; public addresses are hidden; titles, people, players and command lines are
+   * replaced with placeholders unless `includeNames` is set.
+   */
+  async diagnostics(input: ReportInput & { includeNames?: boolean }): Promise<string> {
+    const config = input.config;
+    const selection = (config.selection ?? {}) as { players?: { id: string; name?: string }[]; libraries?: { key: string; title?: string }[] };
+    const playerNames = new Map((selection.players ?? []).map((p) => [p.id, p.name ?? p.id]));
+    const libraryNames = new Map((selection.libraries ?? []).map((l) => [l.key, l.title ?? l.key]));
+    const commands = new Map(((config.commands as { list?: { id: string; name?: string; command?: string }[] } | undefined)?.list ?? []).map((c) => [c.id, c]));
+    const list = (values: unknown, name: (v: string) => string, all: string) => {
+      const items = Array.isArray(values) ? values.map(String) : [];
+      return items.length === 0 ? all : items.map(name).join(', ');
+    };
+
+    const lines = [
+      'Intermission diagnostics',
+      `Created ${new Date(this.now()).toISOString()}. ${input.includeNames ? 'Titles and names are included.' : 'Titles, people, players and command lines are replaced with placeholders.'}`,
+      'Never includes your Plex sign-in, server tokens or webhook key. Public addresses are hidden.',
+      '', '== Setup ==', await this.setupReport(input),
+      '', '== Sensors ==',
+    ];
+    const sensors = Array.isArray(config.sensors) ? config.sensors as Record<string, unknown>[] : [];
+    for (const sensor of sensors) {
+      const f = (sensor.filters ?? {}) as Record<string, unknown>;
+      const run = (sensor.run ?? {}) as Record<string, string[]>;
+      const ran = ['on', 'off', 'press'].flatMap((key) => (run[key]?.length ? [`${key}: ${run[key].map((id) => commands.get(id)?.name ?? id).join(', ')}`] : []));
+      lines.push(`${String(sensor.name)} [${String(sensor.type)}${sensor.group ? `, ${String(sensor.group).split(':')[0]} preset` : ''}]`);
+      lines.push(sensor.type === 'button'
+        ? `  pressed on: ${list(sensor.events, (e) => e, 'nothing')}`
+        : `  on while: ${String(sensor.state)}${Array.isArray(sensor.except) && sensor.except.length ? `, except ${sensor.except.join(' and ')}` : ''}`);
+      lines.push(`  players: ${list(f.players, (id) => player(playerNames.get(id) ?? id), 'all')}`);
+      lines.push(`  people: ${list(f.users, (u) => person(u), 'all')}`);
+      lines.push(`  libraries: ${list(f.libraries, (k) => `${libraryNames.get(k) ?? k}`, 'all')}`);
+      if (Array.isArray(f.mediaTypes) && f.mediaTypes.length) {
+        lines.push(`  media types: ${f.mediaTypes.join(', ')}`);
+      }
+      if (sensor.media && Object.keys(sensor.media).length) {
+        lines.push(`  media conditions: ${JSON.stringify(sensor.media)}`);
+      }
+      if (ran.length) {
+        lines.push(`  commands: ${ran.join('; ')}`);
+      }
+    }
+    if (commands.size > 0) {
+      lines.push('', `== Commands (${(config.commands as { enabled?: boolean }).enabled ? 'on' : 'off'}) ==`);
+      for (const command of commands.values()) {
+        lines.push(`${command.name ?? '?'}: ${commandLine(command.command ?? '')}`);
+      }
+    }
+    const log = await readDiagnostics(this.options.storage.directory);
+    lines.push('', `== Recent log (${log.length} lines, oldest first, detailed) ==`, ...(log.length ? log : ['Nothing logged yet. Restart Homebridge once, so Intermission starts keeping its log.']));
+
+    const credentials = await this.options.storage.readCredentials();
+    const { webhookSecret } = await this.options.storage.state();
+    const secrets = [webhookSecret, credentials?.accountToken, credentials?.serverToken, ...Object.values(credentials?.serverTokens ?? {})].filter((s): s is string => Boolean(s));
+    return hidePublicAddresses(scrubSecrets(redact(lines.join('\n'), input.includeNames === true), secrets));
+  }
+
+  private async setupReport(input: ReportInput): Promise<string> {
     const lines: string[] = [];
     const version = await readFile(new URL('../package.json', import.meta.url), 'utf8')
       .then((text) => (JSON.parse(text) as { version?: string }).version ?? '?', () => '?');
@@ -397,7 +474,7 @@ export class SetupService {
 
     const credentials = await this.options.storage.readCredentials();
     const status = await this.status(typeof input.config.setupId === 'string' ? input.config.setupId : undefined);
-    lines.push(`Plex account: ${status.signedIn ? status.username ?? 'signed in' : 'not signed in'}`);
+    lines.push(`Plex account: ${status.signedIn ? (status.username ? person(status.username) : 'signed in') : 'not signed in'}`);
     lines.push(`Plex Pass: ${status.plexPass === undefined ? 'unknown' : status.plexPass ? 'yes' : 'no'}`);
 
     for (const ref of input.servers) {
@@ -474,7 +551,15 @@ function pathOf(url: string): string | undefined {
   }
 }
 
-const PRIVATE = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.)/;
+const PRIVATE = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|169\.254\.|0\.)/;
+
+/** Replaces public IPv4 addresses anywhere in a text; private ones stay, since they help diagnosis. */
+export function hidePublicAddresses(text: string): string {
+  return text
+    .replace(/\b(\d{1,3})-(\d{1,3})-(\d{1,3})-(\d{1,3})\.([0-9a-f]{32})\.plex\.direct/gi, (match, a, b, c, d) =>
+      (PRIVATE.test(`${a}.${b}.${c}.${d}`) ? match : 'remote-address.plex.direct'))
+    .replace(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g, (ip) => (PRIVATE.test(ip) || ip.split('.').some((p) => Number(p) > 255) ? ip : 'x.x.x.x'));
+}
 
 /** Shows private addresses, which help diagnosis, and hides public ones before a report is shared. */
 function maskAddress(url: string): string {

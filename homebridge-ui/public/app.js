@@ -332,8 +332,8 @@ async function refreshFromPlex() {
     state.status = await request('/status', { setupId: state.config.setupId });
     state.discovery = await request('/discover', { servers: servers() });
     await refreshWebhook();
-    if (state.tab === 'advanced') {
-      state.report = await request('/report', reportBody());
+    if (state.tab === 'advanced' && state.report) {
+      state.report = await request('/diagnostics', { ...reportBody(), includeNames: state.includeNames === true });
     }
   });
 }
@@ -528,16 +528,16 @@ function main() {
 /** Says plainly when settings are not in use yet: unsaved, or saved and waiting for a restart. */
 function restartBanner() {
   if (state.dirty) {
-    return `<div class="im-card im-banner im-banner-info mb-3"><strong>You have unsaved changes.</strong>
+    return `<div class="im-card im-banner im-banner-info mb-3"><strong class="im-banner-title">You have unsaved changes.</strong>
       <span>Click <strong>Save</strong> below, then restart Homebridge to apply them.</span></div>`;
   }
   if (!needsRestart()) {
     return '';
   }
   return state.runtime.running
-    ? `<div class="im-card im-banner im-banner-info mb-3"><strong>Restart Homebridge to apply your saved settings.</strong>
+    ? `<div class="im-card im-banner im-banner-info mb-3"><strong class="im-banner-title">Restart Homebridge to apply your saved settings.</strong>
         <span>Intermission keeps using the previous settings until then.</span></div>`
-    : `<div class="im-card im-banner im-banner-info mb-3"><strong>Intermission is set up.</strong>
+    : `<div class="im-card im-banner im-banner-info mb-3"><strong class="im-banner-title">Intermission is set up.</strong>
         <span>Restart Homebridge to start it. Your sensors appear in Apple Home after the restart.</span></div>`;
 }
 
@@ -683,9 +683,11 @@ function editor(sensor, sel) {
     ${isState
       ? `<label class="im-label" for="im-state">On while</label><select id="im-state" class="form-select" data-field="state">${conditions}</select>
         ${CAN_EXCEPT.includes(sensor.state) ? `<label class="im-label">Except during <span>(the sensor turns off for these)</span></label>
-          <div class="im-chips">${Object.entries(EXCEPTIONS).map(([id, e]) => `<button class="im-chip" data-action="toggle-except" data-id="${id}" ${pressed((sensor.except ?? []).includes(id))}>${escape(e.label)}</button>`).join('')}</div>` : ''}
+          <div class="im-chips">${Object.entries(EXCEPTIONS).map(([id, e]) => `<button class="im-chip" data-action="toggle-except" data-id="${id}" ${pressed((sensor.except ?? []).includes(id))}>${escape(e.chip)}</button>`).join('')}</div>` : ''}
         ${usesCredits(sensor) ? creditsChoice() : ''}
-        ${sensor.state === 'intro' || (sensor.except ?? []).includes('intro') ? '<p class="im-hint">Intros come from Plex\'s intro markers, found on servers with Plex Pass, mostly for TV episodes.</p>' : ''}`
+        ${sensor.state === 'intro' || (sensor.except ?? []).includes('intro') ? `<p class="im-hint">${state.status.plexPass === false
+          ? 'Without Plex Pass, only items that already have Plex intro markers have an intro. Plex finds new ones only on servers with Plex Pass.'
+          : 'Intros come from Plex\'s intro markers, found on servers with Plex Pass, mostly for TV episodes.'}</p>` : ''}`
       : `<label class="im-label">Pressed when</label><div class="im-chips">${chips('toggle-event', Object.keys(EVENTS), sensor.events ?? [],
         (e) => `${EVENTS[e].label}${EVENTS[e].plexPass ? ' ★' : ''}`, (e) => noPass && EVENTS[e].plexPass)}</div>
         <div class="im-hint">★ needs Plex Pass</div>`}
@@ -724,7 +726,7 @@ function mediaSection(sensor) {
     `<button class="im-chip" data-action="media-toggle" data-group="${group}" data-id="${escape(id)}" ${pressed((chosen ?? []).includes(id))}>${escape(label)}</button>`).join('');
   const any = (group, label) => `<button class="im-chip im-all" data-action="media-any" data-group="${group}" ${pressed(media[group] === undefined || media[group].length === 0)}>${label}</button>`;
   const head = `<button class="im-collapse-head im-media-head" data-action="toggle-open" data-id="media:${escape(sensor.id)}" aria-expanded="${open}">
-      <span><strong>Only when the media is…</strong><small>${on ? 'Conditions set. The sensor stays off for media that doesn\'t match.' : 'Optional: picture shape, resolution, HDR, rating or labels.'}</small></span>
+      <span><strong>Only when the media is…</strong><small>${on ? 'Conditions set. The sensor stays off for media that doesn\'t match.' : 'Optional: picture shape, resolution, HDR, rating or Plex labels.'}</small></span>
       <span class="im-chevron" aria-hidden="true">${open ? '▾' : '▸'}</span></button>`;
   if (!open) {
     return `<div class="im-media">${head}</div>`;
@@ -736,7 +738,7 @@ function mediaSection(sensor) {
     <label class="im-label">Resolution</label><div class="im-chips">${any('resolution', 'Any')}${chips('resolution', RESOLUTIONS, media.resolution)}</div>
     <label class="im-label">HDR</label><div class="im-chips">${any('dynamicRange', 'Any')}${chips('dynamicRange', DYNAMIC_RANGES, media.dynamicRange)}</div>
     <label class="im-label">Rating</label><div class="im-chips">${any('ratings', 'Any rating')}${chips('ratings', Object.fromEntries([...new Set([...RATINGS, ...(media.ratings ?? [])])].map((r) => [r, r])), media.ratings)}</div>
-    <label class="im-label" for="im-labels">Labels <span>(any of these, separated by commas; an episode also uses its show's labels)</span></label>
+    <label class="im-label" for="im-labels">Plex labels <span>(the labels you add to items in Plex; any of these, separated by commas; an episode also uses its show's labels)</span></label>
     <input id="im-labels" class="form-control form-control-sm" data-media-labels value="${escape((media.labels ?? []).join(', '))}" placeholder="For example Kids, Date Night">
     <p class="im-hint">Read from the library item when play starts, so transcoding never changes them. Live TV has no details, so a sensor with conditions stays off for it.</p>
     ${nowPlayingPanel(sensor)}
@@ -767,7 +769,7 @@ function nowPlayingPanel(sensor) {
         <dt>Resolution</dt><dd>${escape(f.resolution ?? 'Unknown')} ${facts.resolution ? add('resolution', facts.resolution, f.resolution) : ''}</dd>
         <dt>HDR</dt><dd>${escape(f.dynamicRange ?? 'Unknown')} ${facts.dynamicRange ? add('dynamicRange', facts.dynamicRange, f.dynamicRange) : ''}</dd>
         <dt>Rating</dt><dd>${escape(f.rating ?? 'None')} ${f.rating ? add('ratings', f.rating) : ''}</dd>
-        <dt>Labels</dt><dd>${f.labels.length ? f.labels.map((l) => `${escape(l)} ${add('labels', l)}`).join(' · ') : 'None'}</dd>
+        <dt>Plex labels</dt><dd>${f.labels.length ? f.labels.map((l) => `${escape(l)} ${add('labels', l)}`).join(' · ') : 'None'}</dd>
       </dl>`;
     return `<div class="im-np-item"><strong>${escape(item.title)}</strong>
       <small class="d-block im-muted">${escape([item.library, item.player, item.user, np.items.some((i) => i.server !== item.server) ? item.server : ''].filter(Boolean).join(' · '))}</small>${rows}</div>`;
@@ -828,7 +830,7 @@ function noPlexPassSummary() {
       <small>Intermission works without it. Pause, resume, stop, skips and the credits all work. What you don't get:</small>
       <ul class="small mb-0 mt-1 im-list">
         <li><strong>Instant play:</strong> Plex reports play up to about 10 seconds after you press it, so sensors change a little later. Everything else is instant.</li>
-        <li><strong>New credits markers:</strong> Plex only finds credits on servers with Plex Pass. Items that already have markers still use them; the rest use 95% of the runtime, with no mid-credits scenes.</li>
+        <li><strong>New credits and intro markers:</strong> Plex only finds credits and intros on servers with Plex Pass. Items that already have markers still use them. Others use 95% of the runtime for the credits, with no mid-credits scenes, and have no intro.</li>
         <li><strong>Plex Pass events:</strong> "Marked as watched", "Rated", "Added to a library" and similar events can't be used on buttons.</li>
       </ul>
     </div></div>`;
@@ -910,11 +912,11 @@ function recipesTab() {
     <button class="btn btn-sm btn-outline-secondary ms-auto" data-action="pick-preset" data-id="${id}">Add this preset</button></div>`;
   const good = `<ul class="small mb-0">
       <li><strong>Why suggest sensors, not buttons?</strong> Home can always read a sensor. If it misses a change (hub restart, Wi-Fi drop, Homebridge restart), it sees the right state when it reconnects. A missed button press is simply gone. Buttons are still available for one-off actions.</li>
-      <li>Pauses under 2 seconds, skips and quick pause-play bursts don't change any sensor, so lights never stutter.</li>
+      <li>Pauses under 2 seconds, skips and quick pause-play bursts don't change any sensor, so lights never stutter. Adjust it in Settings, Advanced, <strong>Pause debounce</strong>.</li>
       <li>Movies and TV Shows get credits and intro handling. Music, Photos, Other Videos and Live TV just follow play, pause and stop.</li>
       <li>What counts as the credits is one setting shared by every sensor, so sensors that follow the credits always agree. By default a mid-credits scene counts as playing.</li>
       <li>A pause during the credits keeps "In the credits" sensors on, so a fade isn't interrupted.</li>
-      <li>Autoplaying the next episode isn't a stop.</li>
+      <li>Autoplaying the next episode isn't a stop: after playback stops, sensors wait 10 seconds for the next episode before Nothing Playing turns on. If your player's countdown is longer, raise Settings, Advanced, <strong>Stop hold</strong>.</li>
       <li>After a Homebridge restart, sensors keep their last state until Plex has been read, so lights don't jump.</li>
       <li>Renaming a sensor keeps the automations that use it. If you renamed it in the Home app, Home keeps your name. Removing a sensor removes it from Apple Home.</li>
     </ul>`;
@@ -1071,20 +1073,12 @@ function advancedTab() {
     ${collapsible('advanced', 'Advanced', 'Timing, logging and commands. These rarely need changing.', `
       ${fields}
       <div class="im-field">
-        <label for="im-detailed"><strong>Detailed logging</strong><small>Logs every event and timer decision. Turn on when reporting a problem.</small></label>
+        <label for="im-detailed"><strong>Detailed logging</strong><small>Shows every Plex report, event and decision in the Homebridge log, including why each sensor follows or ignores a playback. Diagnostics includes this detail either way, so you only need it to watch along live.</small></label>
         <div class="form-check form-switch"><input id="im-detailed" class="form-check-input" type="checkbox" data-detailed ${state.config.detailedLogging ? 'checked' : ''}></div>
       </div>
       ${commandsSection()}`)}
 
-    <div class="im-card">
-      <div class="d-flex align-items-center mb-2"><strong>About this setup</strong>
-        <span class="ms-auto d-flex gap-1">
-          <button class="btn btn-sm btn-outline-secondary" data-action="load-report">${state.report ? 'Refresh' : 'Show'}</button>
-          ${state.report ? '<button class="btn btn-sm btn-outline-secondary" data-action="copy-report">Copy</button>' : ''}
-        </span></div>
-      <p class="im-hint mb-2">Server, Plex Pass, libraries and settings, for troubleshooting. Contains no sign-in token. Public addresses are hidden.</p>
-      ${state.report ? `<textarea class="form-control im-report" readonly rows="14">${escape(state.report)}</textarea>` : ''}
-    </div>
+    ${diagnosticsCard()}
 
     ${collapsible('reset', 'Reset', '', `
       <div class="im-field d-block">
@@ -1098,6 +1092,28 @@ function advancedTab() {
         <button class="btn btn-sm ${state.confirming === 'reset-plugin' ? 'btn-danger' : 'btn-outline-danger'}" data-action="reset-plugin">${state.confirming === 'reset-plugin' ? 'Tap again to reset everything' : 'Reset Intermission…'}</button>
         ${state.confirming === 'reset-plugin' ? '<button class="btn btn-sm btn-outline-secondary ms-2" data-action="cancel-confirm">Cancel</button>' : ''}
       </div>`)}`;
+}
+
+/** Diagnostics for a bug report: setup, sensors and the recent log, with private details replaced. */
+function diagnosticsCard() {
+  return `<div class="im-card" id="im-diagnostics">
+      <strong>Diagnostics</strong>
+      <p class="small mt-1 mb-2">For reporting a problem: one text file with your setup, your sensors and Intermission's recent log. Intermission keeps that log on its own, so you don't need to turn on Detailed logging or make the problem happen again first.</p>
+      <p class="im-hint mt-0 mb-2">It never includes your Plex sign-in or webhook key, and public addresses are hidden. Titles, people, players and command lines are replaced with placeholders such as "Title 1" unless you include them below. It's plain text, so you can read it before you share it.</p>
+      <label class="im-row mb-2"><input type="checkbox" class="form-check-input" data-include-names ${state.includeNames ? 'checked' : ''}>
+        <span>Include titles and names <small class="d-block im-muted">Only if the problem is about a specific title, person or player.</small></span></label>
+      <div class="d-flex flex-wrap gap-2">
+        <button class="btn btn-sm btn-im" data-action="download-diagnostics">Download diagnostics</button>
+        <button class="btn btn-sm btn-outline-secondary" data-action="copy-diagnostics">Copy</button>
+        <button class="btn btn-sm btn-outline-secondary" data-action="show-diagnostics">${state.report ? 'Refresh' : 'Show'}</button>
+      </div>
+      ${state.report ? `<textarea class="form-control im-report mt-2" readonly rows="16">${escape(state.report)}</textarea>` : ''}
+    </div>`;
+}
+
+async function loadDiagnostics() {
+  state.report = await request('/diagnostics', { ...reportBody(), includeNames: state.includeNames === true });
+  return state.report;
 }
 
 // Footer icons, the same ones as the Gouly plugin.
@@ -1123,11 +1139,12 @@ function footer() {
   const help = state.bugHelp && bugUrl ? `<div class="im-card im-banner mt-3 small">
       <strong>To get the quickest fix</strong>
       <ol class="mb-2 mt-1">
-        <li>Advanced: turn on Detailed logging, press Save, restart Homebridge, then make the problem happen again.</li>
-        <li>Advanced: About this setup, then Copy. It never contains your Plex sign-in.</li>
-        <li>Open the bug report and paste it in, with the log lines.</li>
+        <li>In Settings, Diagnostics, press <strong>Download diagnostics</strong> (or Copy). Do it soon after the problem: the log covers roughly the last day.</li>
+        <li>Open the bug report, say what happened and when, and attach the file (or paste the text).</li>
+        <li>The file never includes your Plex sign-in, and titles and names are replaced unless you choose to include them.</li>
       </ol>
-      <div class="d-flex gap-2"><a class="btn btn-sm btn-im" href="${escape(bugUrl)}" target="_blank" rel="noopener">Open bug report</a>
+      <div class="d-flex gap-2"><button class="btn btn-sm btn-outline-secondary" data-action="goto-diagnostics">Go to Diagnostics</button>
+      <a class="btn btn-sm btn-im" href="${escape(bugUrl)}" target="_blank" rel="noopener">Open bug report</a>
       <button class="btn btn-sm btn-outline-secondary" data-action="bug-help">Close</button></div>
     </div>` : '';
   return `${help}<footer class="im-footer">${[
@@ -1428,11 +1445,39 @@ const actions = {
   'set-type': (el) => { setType(editingSensor(), el.dataset.id); return changed(); },
   'remove-webhook': () => confirmThen('remove-webhook', () => busy('Removing the webhook…', async () => {
     state.webhook = await request('/webhook/remove', webhookBody());
+    state.webhookPlan = { add: false, remove: [] };
+    homebridge.toast.success('The Intermission webhook was removed from your Plex account.', 'Plex webhooks');
   })),
-  'load-report': () => busy('Collecting details…', async () => {
-    state.report = await request('/report', reportBody());
-  }),
-  'copy-report': () => copy(state.report, 'Copied.'),
+  'show-diagnostics': () => busy('Collecting diagnostics…', loadDiagnostics),
+  'copy-diagnostics': async () => {
+    await busy('Collecting diagnostics…', loadDiagnostics);
+    if (state.report) {
+      await copy(state.report, 'Diagnostics copied.');
+    }
+  },
+  'download-diagnostics': async () => {
+    await busy('Collecting diagnostics…', loadDiagnostics);
+    if (!state.report) {
+      return;
+    }
+    try {
+      const url = URL.createObjectURL(new Blob([state.report], { type: 'text/plain' }));
+      const link = Object.assign(document.createElement('a'), { href: url, download: `intermission-diagnostics-${new Date().toISOString().slice(0, 10)}.txt` });
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      homebridge.toast.success('If no file appeared, use Copy and paste the text into the bug report instead.', 'Diagnostics');
+    } catch {
+      homebridge.toast.info('This browser blocked the download. Use Copy instead.', 'Diagnostics');
+    }
+  },
+  'goto-diagnostics': () => {
+    state.tab = 'advanced';
+    state.bugHelp = false;
+    render();
+    document.getElementById('im-diagnostics')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  },
   'reset-advanced': () => confirmThen('reset-advanced', () => {
     delete state.config.timing;
     delete state.config.webhook;
@@ -1509,6 +1554,11 @@ root.addEventListener('change', (event) => {
     const sensor = editingSensor();
     mediaOf(sensor).labels = [...new Set(el.value.split(',').map((l) => l.trim()).filter(Boolean))];
     void mediaChanged();
+    return;
+  } else if (el.hasAttribute('data-include-names')) {
+    state.includeNames = el.checked;
+    state.report = '';
+    render();
     return;
   } else if (el.hasAttribute('data-webhook-add')) {
     state.webhookPlan.add = el.checked;

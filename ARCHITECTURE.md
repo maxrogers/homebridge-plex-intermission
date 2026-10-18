@@ -412,11 +412,33 @@ the Homebridge theme, with warm accents from `--im-accent`.
 
 ## Logging and diagnostics
 
-- **Normal level:** one concise line per meaningful change, for example `Apple TV: credits started (Practical Magic 2) -> Credits Rolling`.
-- **Detailed logging:** includes every input event, timer decisions and reads.
-- **Ring buffer:** the last 500 events and decisions are kept in memory.
-- **Download debug report:** versions, settings (without the token), server version and the prefs above,
-  selected players and libraries, recent events and decisions, and errors. An option masks IP addresses and media titles.
+**Normal log** (what a user watches): startup summary, connection to each server, webhook receiver listening, every
+sensor turning on or off with what was playing ("Credits Rolling: on (Dune: Part Two, Living Room)"), button presses,
+commands run or failed, Plex Pass changes, and errors with what to do about them.
+
+**Detailed logging** (Settings, Advanced) adds, at info level in the Homebridge log:
+- each change Plex reports per player (state, position, item);
+- each playback event with title, player and position;
+- per item: credits ranges and why (markers and mode, the percentage fallback, or no credits because of the library,
+  media type or Live TV) and intro ranges;
+- for each state sensor when an item starts, whether it follows this playback or why not (player, person, library,
+  media type or a media condition), repeated for media conditions once the item's details are read;
+- pauses ignored by the pause debounce, the stop hold starting, and "the next item started within the stop hold";
+- the startup decision (sensors keep their pre-restart state until Plex is read, or 20 s pass);
+- webhooks received, media details read, and command lines.
+
+**Kept log.** Whatever the setting, everything above (debug included) is also written to `intermission/diagnostics.log`
+in Homebridge's storage, rolling to `diagnostics.1.log` at about 1 MB (roughly a day of use), owner-readable only.
+Titles, people, players and command lines are written with invisible markers; Homebridge's log shows them as plain
+text.
+
+**Diagnostics** (Settings): one text file for a bug report with the setup report, every sensor (conditions, filters,
+media conditions, commands), command names, and the last 6,000 kept log lines. Before it leaves the plugin, account
+and server tokens, the webhook key and `X-Plex-Token` values are removed, public IPv4 addresses (and public
+`plex.direct` names) become `x.x.x.x`, and marked values become "Title 1", "Person 1", "Player 1" and "(command line
+hidden)" unless "Include titles and names" is ticked. Download, Copy and Show; Copy is the fallback if the settings
+frame blocks downloads. The footer's "Report a bug" walks through: download diagnostics soon after the problem, open
+the bug report, attach the file.
 
 ## Lifecycle
 
@@ -470,7 +492,7 @@ A state sensor has one condition and, for Playing, Paused and Playing or paused,
 | Nothing playing | | Every State |
 
 Every preset is just these settings, so anything a preset makes can be built from scratch or turned into anything else
-in the editor. "What counts as the credits" (scenes count as playing, the default; scenes count as credits; final
+in the editor. "What counts as the credits" (mid-credits scenes count as playing, the default; mid-credits scenes count as credits; final
 credits only) is one setting shared by every sensor, because sensors that follow the credits must agree: with a
 per-sensor choice, "Playing except the credits" and "In the credits" could both be off during a mid-credits scene, and
 Every State could have two sensors on. The choice is shown in the editor of every sensor it affects, labelled as

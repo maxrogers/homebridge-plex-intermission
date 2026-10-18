@@ -38,6 +38,13 @@ class IntermissionUiServer extends HomebridgePluginUiServer {
       remove: Array.isArray(body.remove) ? body.remove.filter((url) => typeof url === 'string') : [],
     }));
     this.handle('/webhook/remove', (body) => service.removeWebhook(webhook(body)));
+    this.handle('/diagnostics', (body) => service.diagnostics({
+      config: body.config ?? {},
+      servers: body.servers ?? [],
+      homebridgeVersion: body.homebridgeVersion,
+      nodeVersion: process.version,
+      includeNames: body.includeNames === true,
+    }));
     this.handle('/report', (body) => service.report({
       config: body.config ?? {},
       servers: body.servers ?? [],

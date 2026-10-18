@@ -8,7 +8,8 @@ import { webhookFromPayload } from './plex/convert.js';
 import type { PlexWebhookPayload } from './plex/types.js';
 import { PlexHttpError } from './plex/server.js';
 import type { MediaFacts } from './plex/media-facts.js';
-import { contextOf, matchesFilters, mediaMatches, stateHolds, type MatchContext } from './sensors/rules.js';
+import { player as markPlayer, title as markTitle } from './diagnostics.js';
+import { contextOf, filterMismatch, matchesFilters, mediaMatches, mediaMismatch, stateHolds, type MatchContext } from './sensors/rules.js';
 
 /** The parts of PlexServer the controller uses. */
 export interface ServerApi {
@@ -119,16 +120,21 @@ export class Controller {
   async start(): Promise<void> {
     this.stopped = false;
     this.ready = false;
-    this.readyTimer = this.options.clock.setTimeout(() => this.becomeReady(), STARTUP_GRACE_MS);
+    this.readyTimer = this.options.clock.setTimeout(() => this.becomeReady(true), STARTUP_GRACE_MS);
     this.options.stream.start();
   }
 
-  private becomeReady(): void {
+  private becomeReady(fromTimer = false): void {
     if (this.readyTimer) {
       this.options.clock.clearTimeout(this.readyTimer);
       this.readyTimer = undefined;
     }
     if (!this.ready && !this.stopped) {
+      if (fromTimer) {
+        this.options.log.debug('No playback read from Plex within %ds of starting; sensors follow playback from now.', STARTUP_GRACE_MS / 1000);
+      } else {
+        this.options.log.debug('Playback read from Plex; sensors follow it from now (until then they kept their state from before the restart).');
+      }
       this.ready = true;
       this.refreshStates();
     }
@@ -188,8 +194,11 @@ export class Controller {
 
   private onEngineEvent(event: EngineEvent): void {
     const { log } = this.options;
-    log.debug('%s: %s on %s at %ds', event.type, event.session.media.title,
-      event.session.playerTitle ?? event.playerId, Math.round(event.positionMs / 1000));
+    log.debug('%s: %s on %s at %ds', event.type, markTitle(event.session.media.title),
+      markPlayer(event.session.playerTitle ?? event.playerId), Math.round(event.positionMs / 1000));
+    if (event.type === 'play') {
+      this.explainSensors(event.session);
+    }
     // States first: a button press is delivered to the hub at once and flushes queued state changes
     // with it, so a shortcut started by the press already sees the new states.
     if (this.ready) {
@@ -281,11 +290,32 @@ export class Controller {
     void this.call(() => this.options.getFacts!(media.ratingKey), undefined).then((facts) => {
       if (facts) {
         this.facts.set(media.ratingKey, facts);
-        this.options.log.debug('Media details for "%s": %j', media.title, facts);
+        this.options.log.debug('Media details for "%s": %j', markTitle(media.title), facts);
         this.refreshStates();
+        const session = this.engine.snapshots().find((s) => s.session?.media.ratingKey === media.ratingKey)?.session;
+        if (session) {
+          this.explainSensors(session, true);
+        }
       }
     });
     return undefined;
+  }
+
+  /**
+   * Detailed logging: which state sensors this playback counts for, and why not for the others.
+   * Logged when an item starts, and again for media conditions once the item's details are read.
+   */
+  private explainSensors(session: SessionInfo, mediaOnly = false): void {
+    const context = contextOf(session, undefined, this.options.server.id);
+    for (const sensor of this.options.sensors) {
+      const config = sensor.config;
+      if (config.type === 'button' || (mediaOnly && !hasMediaConditions(config.media))) {
+        continue;
+      }
+      const reason = filterMismatch(config.filters, context, { player: session.playerTitle, library: session.media.librarySectionTitle })
+        ?? (hasMediaConditions(config.media) ? mediaMismatch(config.media, this.factsFor(session.media)) : undefined);
+      this.options.log.debug('  %s: %s', config.name, reason ? `ignores this playback: ${reason}` : 'follows this playback');
+    }
   }
 
   private scheduleResync(): void {

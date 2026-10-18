@@ -171,6 +171,10 @@ export class PlexTv {
     for (const url of urls) {
       body.append('urls[]', url);
     }
+    // An empty body leaves the list as it is; one empty entry is how the list is cleared.
+    if (urls.length === 0) {
+      body.append('urls[]', '');
+    }
     await this.request<unknown>('/api/v2/user/webhooks', { method: 'POST', token, body, empty: true });
   }
 

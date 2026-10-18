@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 
+import { commandLine } from './diagnostics.js';
 import type { Logger } from './engine/types.js';
 
 /** A command the user named in Settings. */
@@ -57,7 +58,7 @@ export class CommandRunner {
 
   run(command: NamedCommand, context: CommandContext): Promise<CommandResult> {
     const line = expandCommand(command.command, context);
-    this.log.debug('Running command "%s": %s', command.name, line);
+    this.log.debug('Running command "%s": %s', command.name, commandLine(line));
     return new Promise((resolve) => {
       let output = '';
       let timedOut = false;

@@ -20,8 +20,8 @@ export const CONDITIONS = {
 
 /** Conditions that can leave out the credits or intro, and what each exception means. */
 export const EXCEPTIONS = {
-  credits: { label: 'the credits', help: 'Off during the credits.' },
-  intro: { label: 'the intro', help: 'Off while an intro plays (Plex finds intros on servers with Plex Pass).' },
+  credits: { label: 'the credits', chip: 'Credits', help: 'Off during the credits.' },
+  intro: { label: 'the intro', chip: 'Intros', help: 'Off while an intro plays (Plex finds intros on servers with Plex Pass).' },
 };
 export const CAN_EXCEPT = ['playing', 'paused', 'active'];
 
@@ -30,8 +30,8 @@ export const CAN_EXCEPT = ['playing', 'paused', 'active'];
  * credits always agree (Every State relies on that).
  */
 export const CREDITS_MODES = {
-  scenes: { label: 'Scenes count as playing', help: 'Credits start at the first credits. A mid-credits scene counts as playing, then the credits resume.', default: true },
-  first: { label: 'Scenes count as credits', help: 'Credits run from the first credits to the end, including any mid-credits scenes.' },
+  scenes: { label: 'Mid-credits scenes count as playing', help: 'Credits start at the first credits. A mid-credits scene counts as playing, then the credits resume.', default: true },
+  first: { label: 'Mid-credits scenes count as credits', help: 'Credits run from the first credits to the end, including any mid-credits scenes.' },
   final: { label: 'Final credits only', help: 'Earlier credits and mid-credits scenes count as playing. Credits start at the final credits, or the first credits if there are no scenes.' },
 };
 export function creditsMode(timing = {}) {
@@ -126,8 +126,8 @@ export function availableMediaTypes(libraries) {
 export const TIMING_FIELDS = [
   { key: 'creditsOffset', label: 'Credits offset', help: 'Wait this long after the credits marker. Never earlier than the marker.', unit: 's', min: 0, max: 120, default: 0 },
   { key: 'rearmDistance', label: 'Credits re-arm distance', help: 'Rewinds shorter than this never change the credits state, so the rewind Plex does on resume can\'t flick a sensor.', unit: 's', min: 20, max: 600, default: 60 },
-  { key: 'pauseDebounce', label: 'Pause debounce', help: 'Pauses shorter than this are ignored.', unit: 's', min: 0, max: 30, default: 2 },
-  { key: 'stopHold', label: 'Stop hold', help: 'Waits this long after a stop, so autoplaying the next episode is not a stop.', unit: 's', min: 0, max: 60, default: 10 },
+  { key: 'pauseDebounce', label: 'Pause debounce', help: 'Pauses shorter than this are ignored, so skips and quick pause-play bursts don\'t change any sensor.', unit: 's', min: 0, max: 30, default: 2 },
+  { key: 'stopHold', label: 'Stop hold', help: 'After playback stops, sensors keep their state this long in case the next episode autoplays. Raise it if your player\'s autoplay countdown is longer.', unit: 's', min: 0, max: 60, default: 10 },
   { key: 'minItemLength', label: 'Minimum item length', help: 'Shorter items, such as trailers, are ignored. 0 turns this off.', unit: 'min', scale: 60, min: 0, max: 60, default: 0 },
   { key: 'safetyResync', label: 'Safety re-sync', help: 'Only while the connection to Plex is down and something plays. 0 turns this off.', unit: 'min', scale: 60, storedIn: 'min', min: 0, max: 30, default: 5 },
 ];

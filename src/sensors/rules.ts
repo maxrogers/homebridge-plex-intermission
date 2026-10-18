@@ -1,4 +1,5 @@
 import type { Exception, MediaConditions, SensorFilters, StateCondition } from '../config.js';
+import { person, player as playerName } from '../diagnostics.js';
 import { WIDE_ASPECT, type MediaFacts } from '../plex/media-facts.js';
 import type { MediaInfo, PlayerSnapshot, SessionInfo } from '../engine/types.js';
 
@@ -47,41 +48,65 @@ export function stateHolds(condition: StateCondition, snapshot: PlayerSnapshot, 
 }
 
 /**
- * Whether an item meets a sensor's media conditions. Unknown facts fail a condition on them, so a
- * sensor with conditions stays off for media Plex can't describe.
+ * Why an item fails a sensor's media conditions, or undefined when it meets them. Unknown facts fail
+ * a condition on them, so a sensor with conditions stays off for media Plex can't describe.
  */
-export function mediaMatches(conditions: MediaConditions, facts: MediaFacts | undefined): boolean {
+export function mediaMismatch(conditions: MediaConditions, facts: MediaFacts | undefined): string | undefined {
   if (Object.keys(conditions).length === 0) {
-    return true;
+    return undefined;
   }
   if (!facts) {
-    return false;
+    return 'media details not read yet (or Plex has none)';
   }
   const lower = (values: readonly string[]) => values.map((v) => v.toLowerCase());
   if (conditions.shape) {
-    if (facts.aspectRatio === undefined || (facts.aspectRatio >= WIDE_ASPECT) !== (conditions.shape === 'wide')) {
-      return false;
+    if (facts.aspectRatio === undefined) {
+      return 'picture shape unknown';
+    }
+    if ((facts.aspectRatio >= WIDE_ASPECT) !== (conditions.shape === 'wide')) {
+      return `picture is ${facts.aspectRatio.toFixed(2)}:1, not ${conditions.shape}`;
     }
   }
   if (conditions.resolution && (!facts.resolution || !conditions.resolution.includes(facts.resolution))) {
-    return false;
+    return `resolution is ${facts.resolution ?? 'unknown'}, not ${conditions.resolution.join(' or ')}`;
   }
   if (conditions.dynamicRange) {
     const range = facts.dynamicRange;
     // "HDR" includes Dolby Vision, which is HDR too.
     const ok = range !== undefined && (conditions.dynamicRange.includes(range) || (range === 'dv' && conditions.dynamicRange.includes('hdr')));
     if (!ok) {
-      return false;
+      return `HDR is ${range ?? 'unknown'}, not ${conditions.dynamicRange.join(' or ')}`;
     }
   }
   if (conditions.ratings && (!facts.contentRating || !lower(conditions.ratings).includes(facts.contentRating.toLowerCase()))) {
-    return false;
+    return `rated ${facts.contentRating ?? 'nothing'}, not ${conditions.ratings.join(' or ')}`;
   }
   if (conditions.labels) {
     const labels = lower(facts.labels);
     if (!lower(conditions.labels).some((label) => labels.includes(label))) {
-      return false;
+      return `Plex labels ${facts.labels.length ? facts.labels.join(', ') : 'none'}, not ${conditions.labels.join(' or ')}`;
     }
   }
-  return true;
+  return undefined;
+}
+
+export function mediaMatches(conditions: MediaConditions, facts: MediaFacts | undefined): boolean {
+  return mediaMismatch(conditions, facts) === undefined;
+}
+
+/** Why a filter leaves out this playback, or undefined when it allows it. For detailed logging. */
+export function filterMismatch(filters: SensorFilters, context: MatchContext, names: { player?: string; library?: string } = {}): string | undefined {
+  if (filters.players.length > 0 && (context.playerId === undefined || !filters.players.includes(context.playerId))) {
+    return `player ${playerName(names.player ?? context.playerId ?? 'unknown')} is not chosen`;
+  }
+  if (filters.users.length > 0 && (context.user === undefined || !filters.users.includes(context.user))) {
+    return `${context.user === undefined ? 'the person is unknown' : `${person(context.user)} is not chosen`}`;
+  }
+  if (!matchesFilters({ ...filters, players: [], users: [], mediaTypes: [] }, context)) {
+    return `library ${names.library ?? context.media?.librarySectionId ?? 'unknown'} is not chosen`;
+  }
+  if (!matchesFilters({ players: [], users: [], libraries: [], mediaTypes: filters.mediaTypes }, context)) {
+    return `media type ${context.media?.type ?? 'unknown'} is not chosen`;
+  }
+  return undefined;
 }

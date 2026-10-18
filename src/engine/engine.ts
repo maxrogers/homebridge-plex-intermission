@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 
+import { player as markPlayer, title as markTitle } from '../diagnostics.js';
 import type { Clock, TimerHandle } from './clock.js';
 import { CREDITED_TYPES, creditsRanges, type CreditsRange } from './credits.js';
 import type {
@@ -56,6 +57,8 @@ interface PlayerRecord {
   creditsTimer?: TimerHandle;
   pauseTimer?: TimerHandle;
   stopTimer?: TimerHandle;
+  /** The item that stopped, while the stop hold runs. */
+  stoppedRatingKey?: string;
 }
 
 const ACTIVE = new Set<PlaybackState>(['playing', 'buffering']);
@@ -87,6 +90,9 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
         this.stop(player);
       }
       return;
+    }
+    if (notification.state !== player.raw || notification.ratingKey !== player.ratingKey) {
+      this.deps.log.debug('%s: Plex reports %s at %s (item %s)', label(player), notification.state, formatTime(notification.viewOffset), notification.ratingKey);
     }
     const fresh = this.isNewSession(player, notification.ratingKey, notification.sessionKey);
     if (fresh) {
@@ -241,7 +247,7 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
     const minimum = this.settings.minItemLengthMs;
     player.ignored = minimum > 0 && durationMs !== undefined && durationMs < minimum;
     if (player.ignored) {
-      this.deps.log.debug('%s: ignoring "%s", shorter than the minimum item length', label(player), session.media.title);
+      this.deps.log.debug('%s: ignoring "%s", shorter than the minimum item length', label(player), markTitle(session.media.title));
       return;
     }
 
@@ -257,7 +263,7 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
     Promise.all([session.media.live ? [] : this.deps.getMarkers(session.media.ratingKey), credited]).then(
       ([markers, hasCredits]) => this.applyMarkers(player, generation, markers, hasCredits),
       (error: unknown) => {
-        this.deps.log.warn('Could not read credits markers for "%s": %s', session.media.title, describe(error));
+        this.deps.log.warn('Could not read credits markers for "%s": %s', markTitle(session.media.title), describe(error));
         void credited.then((hasCredits) => this.applyMarkers(player, generation, [], hasCredits));
       },
     );
@@ -271,9 +277,13 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
     player.credits = credited ? creditsRanges(markers, media?.durationMs, this.settings, media?.type) : [];
     player.intro = markers.filter((marker) => marker.type === 'intro' && marker.endMs > marker.startMs)
       .map((marker) => ({ startMs: marker.startMs, endMs: marker.endMs }));
-    this.deps.log.debug('%s: credits %s', label(player), player.credits.length === 0
-      ? 'none'
-      : player.credits.map((r) => `${formatTime(r.startMs)}-${r.endMs === Infinity ? 'end' : formatTime(r.endMs)}`).join(', '));
+    const range = (r: { startMs: number; endMs: number }) => `${formatTime(r.startMs)}-${r.endMs === Infinity ? 'end' : formatTime(r.endMs)}`;
+    const fromMarkers = markers.some((marker) => marker.type === 'credits');
+    this.deps.log.debug('%s: "%s" credits %s; intros %s', label(player), markTitle(media?.title),
+      !credited ? `none (${media?.live ? 'Live TV' : 'this library or media type never gets credits'})`
+        : player.credits.length === 0 ? 'none (no marker, and the percentage fallback is off)'
+          : `${player.credits.map(range).join(', ')}${fromMarkers ? ` (${this.settings.creditsMode} mode)` : ` (no marker: ${this.settings.fallbackPercent}% of the runtime)`}`,
+      player.intro.length === 0 ? 'none' : player.intro.map(range).join(', '));
     this.scheduleMarkers(player);
   }
 
@@ -298,6 +308,8 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
     if (player.stopTimer !== undefined) {
       this.deps.clock.clearTimeout(player.stopTimer);
       player.stopTimer = undefined;
+      this.deps.log.debug('%s: %s within the stop hold, so it is not a stop', label(player),
+        player.ratingKey === player.stoppedRatingKey ? 'playback resumed' : 'the next item started');
     }
     if (!player.ready || player.ignored) {
       return;
@@ -307,6 +319,7 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
       if (player.pauseTimer !== undefined) {
         this.deps.clock.clearTimeout(player.pauseTimer);
         player.pauseTimer = undefined;
+        this.deps.log.debug('%s: pause shorter than the pause debounce (%ds), ignored', label(player), Math.round(this.settings.pauseDebounceMs / 1000));
       }
       if (player.activity === 'paused') {
         player.activity = 'playing';
@@ -352,6 +365,8 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
       this.finish(player);
       return;
     }
+    player.stoppedRatingKey = player.ratingKey;
+    this.deps.log.debug('%s: stopped; waiting %ds (stop hold) in case the next item autoplays', label(player), Math.round(this.settings.stopHoldMs / 1000));
     player.stopTimer = this.deps.clock.setTimeout(() => {
       player.stopTimer = undefined;
       this.finish(player);
@@ -473,7 +488,6 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
       session: player.session,
       positionMs: Math.round(this.position(player, now)),
     };
-    this.deps.log.debug('%s: %s at %s', label(player), type, formatTime(event.positionMs));
     this.emit('event', event);
   }
 
@@ -499,8 +513,8 @@ function unknownSession(playerId: string, ratingKey: string): SessionInfo {
   return { playerId, media: { ratingKey, title: '', type: 'unknown' } };
 }
 
-function label(player: PlayerRecord): string {
-  return player.session?.playerTitle ?? player.id;
+function label(record: PlayerRecord): string {
+  return markPlayer(record.session?.playerTitle ?? record.id);
 }
 
 function formatTime(ms: number): string {

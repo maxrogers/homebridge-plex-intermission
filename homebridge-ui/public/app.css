@@ -222,7 +222,7 @@
 .im .im-run { border-top: 1px dashed var(--im-border); margin-top: 0.75rem; }
 
 /* Restart and unsaved-change banners: noticeable, not alarming. */
-.im .im-banner-info strong { display: block; }
+.im .im-banner-info .im-banner-title { display: block; }
 .im .im-alert-warn { border-color: var(--im-accent-line); }
 
 /* Presets */

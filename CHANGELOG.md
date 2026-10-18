@@ -55,7 +55,7 @@ Initial development.
   exactly one of the four sensors is on at any moment, including through a mid-credits scene.
 - Sensors keep their state across Homebridge restarts until Plex has been read, so lights don't jump on restart.
 - State changes are published before button presses, offs before ons, so automations never see two states at once.
-- "Credits behavior" is now "What counts as the credits": Scenes count as playing (default), Scenes count as credits,
+- "Credits behavior" is now "What counts as the credits": Mid-credits scenes count as playing (default), Mid-credits scenes count as credits,
   Final credits only. Shown under any sensor that follows the credits, labelled as shared, as well as in Settings.
 - Add preset on the Sensors tab and "Add this preset" in the Guide: add alongside existing sensors, or replace them
   (same-name sensors keep their Home automations). Every State is shown as a group with "Remove set".
@@ -67,5 +67,15 @@ Initial development.
 - The Guide starts with Good to know, then a Presets section and ideas beyond the presets.
 - Commands show a short safety note; the name field example is "Projector Control".
 - Fixed: renaming a sensor now renames the cached accessory too (`updateDisplayName`).
+- Fixed: "Remove Intermission webhook" did nothing when it was the only webhook on the account; removal is now
+  checked, and an error says so if Plex keeps it.
+- The log shows every sensor turning on or off with what was playing, and when the webhook receiver starts listening.
+- Detailed logging explains decisions: why a sensor follows or ignores a playback, why an item has no credits, intro
+  ranges, pause debounce, stop hold and autoplay, and the startup state.
+- Diagnostics in Settings: a downloadable text file with the setup, sensors and the recent detailed log, which the
+  plugin always keeps. No sign-in, tokens or webhook key; public addresses hidden; titles, people, players and command
+  lines replaced unless included. "Report a bug" links to it.
+- Without Plex Pass, the summary and the intro hint say that only items with existing intro markers have an intro.
+- Except during: "Credits" and "Intros"; "Mid-credits scenes count as playing / as credits"; "Plex labels".
 - Credits fall back to 95% of the runtime for movies and episodes without a marker, with or without Plex Pass.
   Music, photos and other videos never get a credits event.

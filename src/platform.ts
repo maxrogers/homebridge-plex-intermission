@@ -1,10 +1,13 @@
 import type { API, DynamicPlatformPlugin, Logging, PlatformAccessory, PlatformConfig } from 'homebridge';
 
 import { EventEmitter } from 'node:events';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import { parseConfig, type IntermissionConfig, type SensorConfig } from './config.js';
 import { CommandRunner, type NamedCommand } from './commands.js';
 import { Controller, type ChangeContext, type SensorOutput } from './controller.js';
+import { DiagnosticLog, player as markPlayer, title as markTitle } from './diagnostics.js';
 import { systemClock } from './engine/clock.js';
 import type { Logger } from './engine/types.js';
 import { LibraryTypes } from './plex/library-types.js';
@@ -32,6 +35,7 @@ class SensorHub {
   constructor(
     readonly accessory: SensorAccessory,
     private readonly commands: CommandHooks,
+    private readonly log: Logger,
   ) {
     this.allMustAgree = accessory.config.state === 'idle';
   }
@@ -47,6 +51,9 @@ class SensorHub {
         }
         const on = this.allMustAgree ? this.votes.size === 0 : this.votes.size > 0;
         if (this.accessory.setActive(on)) {
+          const media = context?.session;
+          this.log.info('%s: %s%s', this.accessory.config.name, on ? 'on' : 'off',
+            media ? ` (${markTitle(media.media.title)}, ${markPlayer(media.playerTitle ?? media.playerId)})` : '');
           this.commands.run(this.accessory.config, on ? 'on' : 'off', context);
         }
       },
@@ -100,13 +107,15 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
   private webhooks?: WebhookServer;
   private dailyTimer?: NodeJS.Timeout;
   private readonly fingerprint: string;
+  private readonly diagnostics: DiagnosticLog;
 
   constructor(
     private readonly logging: Logging,
     config: PlatformConfig,
     private readonly api: API,
   ) {
-    this.log = this.createLogger();
+    this.diagnostics = new DiagnosticLog(join(this.api.user.storagePath(), 'intermission'));
+    this.log = this.diagnostics.wrap(this.createLogger());
     this.settings = parseConfig(config, this.log);
     this.fingerprint = configFingerprint(config);
     this.api.on('didFinishLaunching', () => {
@@ -114,6 +123,7 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
     });
     this.api.on('shutdown', () => {
       clearInterval(this.dailyTimer);
+      void this.diagnostics.flush();
       for (const controller of this.controllers) {
         void controller.stop();
       }
@@ -128,9 +138,13 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
   private async start(): Promise<void> {
     // Sensors exist even before sign-in, so Home automations that use them keep working.
     const commands = new CommandHooks(this.settings.commands, new CommandRunner(this.log));
-    const hubs = this.syncAccessories().map((accessory) => new SensorHub(accessory, commands));
+    const hubs = this.syncAccessories().map((accessory) => new SensorHub(accessory, commands, this.log));
 
     const storage = new Storage(this.api.user.storagePath());
+    const version = await readFile(new URL('../package.json', import.meta.url), 'utf8')
+      .then((text) => (JSON.parse(text) as { version?: string }).version ?? '?', () => '?');
+    this.log.debug('Starting Intermission %s on Homebridge %s, Node.js %s, %d sensor%s.', version, this.api.serverVersion, process.version,
+      this.settings.sensors.length, this.settings.sensors.length === 1 ? '' : 's');
     // Lets the settings page show whether the saved settings are running or need a restart.
     await storage.writeRunning({ fingerprint: this.fingerprint, startedAt: new Date().toISOString() })
       .catch((error: unknown) => this.log.debug('Could not record the running settings: %s', String(error)));
@@ -221,6 +235,7 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
     try {
       await webhooks.start();
       this.webhooks = webhooks;
+      this.log.info('Listening for Plex webhooks on port %d.', this.settings.webhook.port);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
       this.log.error(code === 'EADDRINUSE'

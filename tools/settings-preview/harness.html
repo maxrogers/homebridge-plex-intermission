@@ -75,6 +75,7 @@ window.homebridge = {
       case '/webhook/status': return ['ended', 'nopass-adv'].includes(scenario) ? { ...hook, plexPass: false } : hook;
       case '/webhook/add': return { ...hook, registered: true, disabledOn: [] };
       case '/report': return report;
+      case '/diagnostics': return `Intermission diagnostics\nCreated 2026-10-18T23:00:00.000Z. ${body.includeNames ? 'Titles and names are included.' : 'Titles, people, players and command lines are replaced with placeholders.'}\n\n== Setup ==\n${report}\n\n== Recent log ==\n2026-10-18T22:10:01.000Z info  Media Playing: on (${body.includeNames ? 'Dune: Part Two, Living Room' : 'Title 1, Player 1'})`;
       case '/commands/test': return { code: 0, output: 'OK: lens memory 2', timedOut: false };
       case '/about': return { version: '0.1.0', node: 'v24.3.0', repo: 'https://github.com/maxrogers/homebridge-plex-intermission', issues: 'https://github.com/maxrogers/homebridge-plex-intermission/issues', funding: 'https://ko-fi.com/maxrogers' };
       case '/runtime': return { none: { running: false, current: false }, stale: { running: true, current: false } }[qs.get('runtime')] ?? { running: true, current: true };

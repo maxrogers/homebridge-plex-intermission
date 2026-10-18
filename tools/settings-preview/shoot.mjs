@@ -8,7 +8,7 @@ const shots = [
   ['main', null, 1000], ['review', async (p) => p.click('[data-action=open-webhooks]'), 2400],
   ['edit', async (p) => p.click('[data-action=edit][data-id=s-1]'), 1700],
   ['remove', async (p) => { await p.click('[data-action=edit][data-id=s-4]'); await p.click('[data-action=delete]'); }, 1500],
-  ['advanced', async (p) => { await p.click('[data-action=tab][data-id=advanced]'); await p.click('[data-action=load-report]'); }, 1900],
+  ['advanced', async (p) => { await p.click('[data-action=tab][data-id=advanced]'); await p.click('[data-action=show-diagnostics]'); }, 1900],
   ['ended', null, 1300],
   ['nopass-adv', async (p) => p.click('[data-action=tab][data-id=advanced]'), 2000],
   ['reset', async (p) => { await p.click('[data-action=tab][data-id=advanced]'); await p.click('[data-action=toggle-open][data-id=reset]'); await p.click('[data-action=reset-plugin]'); }, 2100],
