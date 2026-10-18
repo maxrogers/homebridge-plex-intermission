@@ -20,6 +20,8 @@ export interface MediaInfo {
   durationMs?: number;
   librarySectionId?: string;
   librarySectionTitle?: string;
+  /** Live TV. Its library is `livetv`; it never has credits. */
+  live?: boolean;
 }
 
 /** Who is playing what, where. Used for sensor filters. */

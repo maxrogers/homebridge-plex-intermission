@@ -34,9 +34,11 @@ webhooks alone. Intermission:
 - **Credits-aware:** a trigger at the moment the credits start, using Plex's own credits markers, never before
 - **Instant, no polling:** driven by your Plex server's push notifications and webhooks; skips and seeks are picked up the moment they happen
 - **Every Plex event:** play, pause, resume, stop, scrobble, rate, new library items, On Deck and server-owner events, plus derived events such as credits start and intro start
-- **Sensors you design:** HomeKit occupancy, motion or contact sensors for states, and buttons for one-off events, filtered by player, user, library and media type
+- **Sensors you design:** HomeKit occupancy, motion or contact sensors for states, and buttons for one-off events, filtered by player, user and library (including Live TV)
+- **Media conditions:** a sensor that only turns on for wide movies, 4K, HDR, certain ratings or Plex labels, for projector masking or kids' lighting
+- **Commands:** optional shell commands when a sensor changes, run by Homebridge itself
 - **Sign in with Plex:** players, users and libraries are listed for you to pick; no token hunting
-- **Three suggested setups:** Simple, Simple + Credits (with mid-credits scenes) and Every State, or build your own
+- **Three presets:** Simple, Simple + Credits (with mid-credits scenes) and Every State, added at setup or later, or build your own
 - **One-click webhook setup:** shows your current Plex webhooks and asks before changing anything
 - **Home recipes:** step-by-step Home app automations, including gentle fades that differ for credits and pause
 - **Live view and debug report** for troubleshooting

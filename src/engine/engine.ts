@@ -254,7 +254,7 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
 
     const credited = Promise.resolve(this.deps.hasCredits?.(session.media) ?? CREDITED_TYPES.has(session.media.type))
       .catch(() => CREDITED_TYPES.has(session.media.type));
-    Promise.all([this.deps.getMarkers(session.media.ratingKey), credited]).then(
+    Promise.all([session.media.live ? [] : this.deps.getMarkers(session.media.ratingKey), credited]).then(
       ([markers, hasCredits]) => this.applyMarkers(player, generation, markers, hasCredits),
       (error: unknown) => {
         this.deps.log.warn('Could not read credits markers for "%s": %s', session.media.title, describe(error));

@@ -198,6 +198,7 @@ test('discovery merges servers, ranks players, lists Home users and groups libra
       { id: '4', title: 'Music', type: 'artist' },
       { id: '5', title: 'Photos', type: 'photo' },
     ],
+    hasLiveTv: async () => true,
   };
   const second = {
     devices: async () => [{ id: '7', clientIdentifier: 'ATV', name: 'Apple TV' }],
@@ -207,6 +208,9 @@ test('discovery merges servers, ranks players, lists Home users and groups libra
     libraries: async () => {
       throw new Error('Plex returned HTTP 401 for /library/sections');
     },
+    hasLiveTv: async () => {
+      throw new Error('offline');
+    },
   };
   const result = await discover([{ id: 'a', name: 'Unraid', server: main }, { id: 'b', name: 'Cabin', server: second }], plexTv, 'token');
   assert.deepEqual(result.players.map((p) => p.id), ['BEDROOM', 'ATV', 'PHONE', 'OLD']);
@@ -214,7 +218,7 @@ test('discovery merges servers, ranks players, lists Home users and groups libra
   assert.equal(result.players[1].plays, 3, 'plays add up across servers');
   assert.equal(result.players[0].playingNow, true);
   assert.deepEqual(result.users.map((u) => u.name), ['Steve', 'Kids']);
-  assert.deepEqual(result.servers[0].libraries.map((l) => `${l.key}:${l.kind}`), ['a/1:movie', 'a/2:other', 'a/3:show', 'a/4:music', 'a/5:photo']);
+  assert.deepEqual(result.servers[0].libraries.map((l) => `${l.key}:${l.kind}`), ['a/1:movie', 'a/2:other', 'a/3:show', 'a/4:music', 'a/5:photo', 'a/livetv:livetv']);
   assert.deepEqual(result.servers[1].libraries, []);
   assert.match(result.servers[1].error, /401/);
 });
@@ -232,4 +236,37 @@ test('library types: Other Videos never get credits, and a new library is read a
   assert.equal(reads, 2, 'read again because library 7 was new');
   assert.equal(await types.hasCredits('a', { type: 'movie', librarySectionId: '8' }), true, 'new movie library');
   assert.equal(reads, 2, 'already known from the same read');
+  assert.equal(await types.hasCredits('a', { type: 'episode', librarySectionId: 'livetv', live: true }), false, 'Live TV never has credits');
+  assert.equal(reads, 2, 'Live TV is not an unknown library');
+});
+
+test('Live TV sessions become the server\'s Live TV library', async () => {
+  const { sessionFromMetadata } = await import('../dist/plex/convert.js');
+  const live = sessionFromMetadata({ ratingKey: '99', type: 'episode', title: 'News', live: '1', Player: { machineIdentifier: 'ATV' } });
+  assert.equal(live.media.live, true);
+  assert.equal(live.media.librarySectionId, 'livetv');
+  assert.equal(live.media.librarySectionTitle, 'Live TV');
+  const normal = sessionFromMetadata({ ratingKey: '5', type: 'movie', librarySectionID: 1, Player: { machineIdentifier: 'ATV' } });
+  assert.equal(normal.media.live, undefined);
+  assert.equal(normal.media.librarySectionId, '1');
+});
+
+test('media facts come from the library item and the show', async () => {
+  const { factsFromMetadata } = await import('../dist/plex/media-facts.js');
+  const facts = factsFromMetadata({
+    type: 'movie', contentRating: 'PG-13', Label: [{ tag: 'Date Night' }],
+    Media: [{ aspectRatio: '2.35', videoResolution: '4k', Part: [{ Stream: [{ streamType: 2 }, { streamType: 1, DOVIPresent: '1', colorTrc: 'smpte2084' }] }] }],
+  });
+  assert.deepEqual(facts, { aspectRatio: 2.35, resolution: '4k', dynamicRange: 'dv', contentRating: 'PG-13', labels: ['Date Night'] });
+  const episode = factsFromMetadata({ type: 'episode', Media: [{ aspectRatio: 1.78, videoResolution: '1080', Part: [{ Stream: [{ streamType: 1, colorTrc: 'bt709' }] }] }] },
+    { contentRating: 'TV-Y7', Label: [{ tag: 'Kids' }] });
+  assert.deepEqual(episode, { aspectRatio: 1.78, resolution: 'hd', dynamicRange: 'sdr', contentRating: 'TV-Y7', labels: ['Kids'] });
+  assert.equal(factsFromMetadata({ Media: [{ Part: [{ Stream: [{ streamType: 1, colorTrc: 'arib-std-b67' }] }] }] }).dynamicRange, 'hdr', 'HLG');
+});
+
+test('the running record tells whether saved settings are in use', async () => {
+  const { configFingerprint } = await import('../dist/runtime.js');
+  const a = configFingerprint({ platform: 'PlexIntermission', sensors: [{ id: 's', name: 'A' }], timing: { stopHold: 5 } });
+  assert.equal(a, configFingerprint({ timing: { stopHold: 5 }, sensors: [{ name: 'A', id: 's' }], platform: 'PlexIntermission', _bridge: { port: 1 } }), 'key order and Homebridge keys do not matter');
+  assert.notEqual(a, configFingerprint({ platform: 'PlexIntermission', sensors: [{ id: 's', name: 'B' }], timing: { stopHold: 5 } }));
 });

@@ -25,9 +25,33 @@ export interface PlexMetadata {
   viewOffset?: number | string;
   librarySectionID?: number | string;
   librarySectionTitle?: string;
+  /** "1" for Live TV. */
+  live?: boolean | number | string;
+  grandparentRatingKey?: string | number;
+  contentRating?: string;
+  Label?: PlexTag[];
+  Genre?: PlexTag[];
+  Media?: PlexMedia[];
   Player?: PlexPlayer;
   User?: PlexAccount;
   Marker?: PlexMarker[];
+}
+
+export interface PlexTag {
+  tag?: string;
+}
+
+export interface PlexStream {
+  streamType?: number | string;
+  DOVIPresent?: boolean | number | string;
+  colorTrc?: string;
+}
+
+export interface PlexMedia {
+  id?: number | string;
+  aspectRatio?: number | string;
+  videoResolution?: string;
+  Part?: { Stream?: PlexStream[] }[];
 }
 
 export interface PlexMarker {

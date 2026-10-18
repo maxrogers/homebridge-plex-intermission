@@ -50,13 +50,13 @@ const SENSORS = [
   { id: 'credits-state', name: 'In Credits', type: 'occupancy', state: 'credits' },
 ];
 
-function setup({ playing = [], markers = [{ type: 'credits', startMs: 100_000, endMs: 120_000, final: true }], raw = {} } = {}) {
+function setup({ playing = [], markers = [{ type: 'credits', startMs: 100_000, endMs: 120_000, final: true }], raw = {}, sensors: list = SENSORS, getFacts } = {}) {
   const clock = new FakeClock();
   const stream = new FakeStream();
   const webhooks = new FakeWebhooks();
   const errors = [];
   const log = { ...silentLog, error: (...args) => errors.push(args) };
-  const config = parseConfig({ servers: [{ id: 'server-1', name: 'Plex', url: 'http://plex' }], sensors: SENSORS, ...raw }, silentLog);
+  const config = parseConfig({ servers: [{ id: 'server-1', name: 'Plex', url: 'http://plex' }], sensors: list, ...raw }, silentLog);
   const sensors = config.sensors.map((sensor) => new FakeSensor(sensor));
   const server = {
     playing: async () => (typeof playing === 'function' ? playing() : playing),
@@ -72,6 +72,7 @@ function setup({ playing = [], markers = [{ type: 'credits', startMs: 100_000, e
     stream,
     webhooks,
     getMarkers: async () => markers,
+    getFacts,
     sensors,
     onUnauthorized: () => unauthorized++,
   });
@@ -253,5 +254,30 @@ test('Every State through a movie with a mid-credits scene: exactly one sensor o
   stream.emit('playing', notify('stopped', 240_000));
   await at(160_000); // after the stop hold
   assert.deepEqual(seen, ['idle', 'playing', 'credits', 'credits', 'credits', 'playing', 'paused', 'playing', 'credits', 'idle']);
+  await controller.stop();
+});
+
+test('media conditions: a sensor turns on once the item\'s details are read, and only when they match', async () => {
+  let reads = 0;
+  const { stream, controller, sensors } = setup({
+    sensors: [
+      { id: 'wide', name: 'Wide Playing', type: 'occupancy', state: 'playing', media: { shape: 'wide' } },
+      { id: 'kids', name: 'Kids Playing', type: 'occupancy', state: 'playing', media: { ratings: ['G', 'PG'] } },
+      { id: 'all', name: 'Media Playing', type: 'occupancy', state: 'playing' },
+    ],
+    getFacts: async () => {
+      reads++;
+      return { aspectRatio: 2.39, resolution: '4k', dynamicRange: 'hdr', contentRating: 'PG-13', labels: [] };
+    },
+  });
+  await controller.start();
+  stream.emit('playing', notify('playing', 10_000));
+  await settle();
+  assert.equal(sensors.all.active, true);
+  assert.equal(sensors.wide.active, true, 'turned on after the details arrived');
+  assert.equal(sensors.kids.active, false, 'PG-13 is not G or PG');
+  stream.emit('playing', notify('playing', 20_000));
+  await settle();
+  assert.equal(reads, 1, 'details are read once per item');
   await controller.stop();
 });

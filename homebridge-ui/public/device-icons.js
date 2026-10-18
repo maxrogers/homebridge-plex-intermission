@@ -229,6 +229,11 @@ export const LIBRARY_ICONS = {
     <rect x="6" y="13" width="26" height="22" rx="5" ${BODY}/><rect x="6" y="13" width="26" height="22" rx="5" ${S}/>
     <path d="M32 21l10-5v16l-10-5" ${S}/>
     <circle cx="13" cy="20" r="2" ${ACC}/>`),
+  livetv: wrap(`
+    <rect x="6" y="16" width="36" height="24" rx="4" ${BODY}/><rect x="6" y="16" width="36" height="24" rx="4" ${S}/>
+    <path d="M17 7l7 9 7-9" ${S}/>
+    <circle cx="34" cy="22" r="2.5" ${ACC}/>
+    <path d="M12 30c3-4 7-4 10 0" ${S} stroke-opacity="0.45"/>`),
 };
 
 /** HomeKit sensor types, for the sensor board. */

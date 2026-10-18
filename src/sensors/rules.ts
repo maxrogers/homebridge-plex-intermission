@@ -1,4 +1,5 @@
-import type { Exception, SensorFilters, StateCondition } from '../config.js';
+import type { Exception, MediaConditions, SensorFilters, StateCondition } from '../config.js';
+import { WIDE_ASPECT, type MediaFacts } from '../plex/media-facts.js';
 import type { MediaInfo, PlayerSnapshot, SessionInfo } from '../engine/types.js';
 
 /** What an event or session offers to match against. Missing fields fail any filter on them. */
@@ -43,4 +44,44 @@ export function stateHolds(condition: StateCondition, snapshot: PlayerSnapshot, 
     case 'idle':
       return snapshot.activity === 'idle';
   }
+}
+
+/**
+ * Whether an item meets a sensor's media conditions. Unknown facts fail a condition on them, so a
+ * sensor with conditions stays off for media Plex can't describe.
+ */
+export function mediaMatches(conditions: MediaConditions, facts: MediaFacts | undefined): boolean {
+  if (Object.keys(conditions).length === 0) {
+    return true;
+  }
+  if (!facts) {
+    return false;
+  }
+  const lower = (values: readonly string[]) => values.map((v) => v.toLowerCase());
+  if (conditions.shape) {
+    if (facts.aspectRatio === undefined || (facts.aspectRatio >= WIDE_ASPECT) !== (conditions.shape === 'wide')) {
+      return false;
+    }
+  }
+  if (conditions.resolution && (!facts.resolution || !conditions.resolution.includes(facts.resolution))) {
+    return false;
+  }
+  if (conditions.dynamicRange) {
+    const range = facts.dynamicRange;
+    // "HDR" includes Dolby Vision, which is HDR too.
+    const ok = range !== undefined && (conditions.dynamicRange.includes(range) || (range === 'dv' && conditions.dynamicRange.includes('hdr')));
+    if (!ok) {
+      return false;
+    }
+  }
+  if (conditions.ratings && (!facts.contentRating || !lower(conditions.ratings).includes(facts.contentRating.toLowerCase()))) {
+    return false;
+  }
+  if (conditions.labels) {
+    const labels = lower(facts.labels);
+    if (!lower(conditions.labels).some((label) => labels.includes(label))) {
+      return false;
+    }
+  }
+  return true;
 }

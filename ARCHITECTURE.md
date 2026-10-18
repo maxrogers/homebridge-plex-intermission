@@ -456,40 +456,6 @@ Both are MIT licensed.
 | Webhook "Add for me" with review, "About this setup" report | Done |
 | Plex Pass change banners, Live tab, debug log export, Intermission switch | Next |
 
-## Planned: media conditions (projectors and more)
-
-Not built yet. Design notes, so it can be added without touching the simple setups.
-
-### How homebridge-plex-metadata does it
-
-It polls `/status/sessions` every 30 s (plus optional webhooks) and publishes the playing item's aspect ratio
-(from the encoded `width`/`height`), resolution, video codec, audio codec and status as **custom string
-characteristics** on a custom service. Apple's Home app does not show custom characteristics and cannot use them in
-automations; only third-party apps (Eve, Controller for HomeKit, Home+) can. The encoded frame is also not the picture
-shape: most 2.39:1 Blu-ray and UHD files are letterboxed 16:9, so they report 1.78.
-
-### How Intermission would do it
-
-Keep Apple Home only: no custom characteristics. A media condition is just another sensor filter, so a projector user
-makes a sensor such as "Scope Movie Playing" (Playing, before the credits; picture: wide) and triggers the projector's
-lens memory from Home through the projector's own plugin. Nothing changes for anyone who doesn't open it.
-
-- **Where the data comes from:** the session read Intermission already does when an item starts (`/status/sessions`:
-  `Media` and its video and audio `Stream`s), plus the item's labels. With webhooks, that read is added only when a
-  sensor uses a media condition. No polling.
-- **Conditions** (all optional, under a collapsed "More conditions" in the sensor editor):
-  - Picture shape: standard (up to 1.9:1) or wide (2.0:1 and wider), from the stream, or from a Plex **label** the user
-    adds (for example "Scope"), which is the reliable option for letterboxed files.
-  - Resolution: SD, 720p, 1080p, 4K.
-  - HDR: SDR, HDR10/HLG, Dolby Vision (from the video stream's color transfer and Dolby Vision flags).
-  - Audio: Dolby Atmos or DTS:X, surround, stereo.
-  - Plex labels and content rating (for example "Kids" or G/PG), for family or theme lighting.
-- **Visibility:** a "Now playing" readout (Live tab) shows exactly what Plex reports for the current item, because
-  stream data varies by file.
-- **Other triggers worth considering:** intro markers ("Intro playing", Plex Pass), time left ("Last 10 minutes" as a
-  state), Live TV versus library, and direct play versus transcode for troubleshooting. Each would be a sensor
-  condition, not a new concept.
-
 ## Sensor conditions
 
 A state sensor has one condition and, for Playing, Paused and Playing or paused, optional exceptions:
@@ -504,8 +470,11 @@ A state sensor has one condition and, for Playing, Paused and Playing or paused,
 | Nothing playing | | Every State |
 
 Every preset is just these settings, so anything a preset makes can be built from scratch or turned into anything else
-in the editor. Credits behavior (mid-credits scenes) stays one setting in Settings because Every State relies on all
-its sensors reading the credits the same way; the editor shows its current value next to any sensor it affects.
+in the editor. "What counts as the credits" (scenes count as playing, the default; scenes count as credits; final
+credits only) is one setting shared by every sensor, because sensors that follow the credits must agree: with a
+per-sensor choice, "Playing except the credits" and "In the credits" could both be off during a mid-credits scene, and
+Every State could have two sensors on. The choice is shown in the editor of every sensor it affects, labelled as
+shared, and in Settings.
 Older configs are read with their old meaning: `playing-any` becomes Playing, and `playing` and `paused` without
 `except` leave out the credits.
 
@@ -529,20 +498,53 @@ so a title can't change the command. Settings has a Test button that runs a comm
 - **About this setup.**
 - **Reset** (collapsed): "Reset all settings" and "Reset Intermission".
 
-## Explored, not built
+## Presets after setup
 
-### Live TV
+The Sensors tab has "Add preset", and each preset in the Guide has "Add this preset". On an empty board the preset is
+added at once. Otherwise the user chooses:
 
-Live TV is not a library section: programs come from the DVR's guide provider, and sessions mark them with
-`live="1"`. It would appear as a "Live TV" entry in each server's library list when the server has a DVR
-(`/livetv/dvrs`), stored as `serverId/live`, not chosen by default. Live programs never get credits (no markers, and
-the percentage fallback would fire on the airing length), so they follow play, pause and stop only.
+- **Add alongside** (default): existing sensors stay; a preset sensor whose name is taken gets " 2", " 3"...
+- **Replace them** (second tap to confirm, with a warning that automations using removed sensors stop working): a
+  preset sensor with the same name as an existing one takes over that sensor's id, filters and commands, so its Home
+  automations survive.
 
-### Media conditions and a "Now playing" inspector
+Only Every State is grouped (`group: "states:<id>"` on its sensors), because its sensors depend on each other: the
+board shows them under one header with "Remove set", and a note when the set was edited so that more than one sensor
+(or none) could be on. Single-sensor presets are ordinary sensors once added.
 
-Media details (picture shape, resolution, HDR, audio, labels, content rating) would be extra conditions under a
-collapsed "More conditions" in the sensor editor, read from the session Intermission already reads when an item
-starts. A "Now playing" panel would show what Plex reports for the current item, with a "+ condition" next to each
-supported field. Showing every raw Plex attribute as a tappable tag was considered and rejected: field names and
-formats vary by Plex version, client and transcode, many values change mid-play, and a condition on an undocumented
-field breaks silently. A curated list keeps conditions stable and explainable.
+## Live TV
+
+Detected per server from `/media/providers`: a provider with the `livetv` protocol or an EPG identifier
+(`tv.plex.providers.epg.*`). This works for shared servers, where `/livetv/dvrs` may be hidden. Discovery lists it as a
+"Live TV" library (`serverId/livetv`, kind `livetv`), not chosen by default. Sessions with `live="1"` get section
+`livetv`, so library filters work unchanged; "All libraries" includes it. Live TV never gets credits: no marker read,
+and no percentage fallback (Plex only knows the scheduled length).
+
+## Media conditions
+
+State sensors can have conditions on what is playing, under "Only when the media is…" in the editor: picture shape
+(wide is 2.2:1 or wider), resolution (4K, HD, SD), HDR (HDR includes Dolby Vision; Dolby Vision; SDR), content rating
+and labels (any of; an episode also uses its show's labels). Every set group must match.
+
+- **Source:** `/library/metadata/{id}` (and the show for an episode), not the session, so values describe the file and
+  never change when Plex starts or stops transcoding. Read once per item, only when some sensor has conditions, and
+  cached. The sensor turns on a moment after play starts, once the read finishes.
+- **Unknown values fail.** A sensor with conditions stays off for media Plex can't describe, including Live TV.
+- **Now playing panel:** in the editor, "Show what's playing now" lists current sessions with their details and a
+  "+ condition" next to each. Raw Plex attributes are not offered as conditions: names and formats vary by version and
+  client, and a condition on an undocumented field breaks silently.
+- Buttons have no media conditions (a press can't wait for the read).
+- Picture shape comes from Plex's `aspectRatio`. A letterboxed 2.39:1 film encoded as 16:9 reports 1.78; a Plex label
+  such as "Scope" is the reliable option for those files.
+
+## Restart banner
+
+At start the plugin writes `running.json` with a fingerprint of the config block it loaded (keys sorted; Homebridge's
+own `_` keys left out). The settings page fingerprints the saved config the same way (`/runtime`) and shows:
+
+- "You have unsaved changes. Click Save, then restart Homebridge" while the page has changes Save hasn't stored.
+- "Restart Homebridge to apply your saved settings" when the saved config differs from the running one.
+- "Intermission is set up. Restart Homebridge to start it" when the plugin has never run.
+
+The webhook port dot is amber while a restart is due, green when Intermission answers, and red when another app holds
+the port or the running plugin isn't listening.

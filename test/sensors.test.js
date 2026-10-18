@@ -36,6 +36,31 @@ test('state conditions, with and without the credits and intro', () => {
   assert.equal(stateHolds('idle', snapshot('idle')), true);
 });
 
+test('media conditions match the item\'s details', async () => {
+  const { mediaMatches } = await import('../dist/sensors/rules.js');
+  const facts = { aspectRatio: 2.39, resolution: '4k', dynamicRange: 'dv', contentRating: 'PG', labels: ['Date Night'] };
+  assert.equal(mediaMatches({}, undefined), true, 'no conditions');
+  assert.equal(mediaMatches({ shape: 'wide' }, undefined), false, 'details not read yet');
+  assert.equal(mediaMatches({ shape: 'wide' }, facts), true);
+  assert.equal(mediaMatches({ shape: 'standard' }, facts), false);
+  assert.equal(mediaMatches({ shape: 'wide' }, { ...facts, aspectRatio: 1.85 }), false);
+  assert.equal(mediaMatches({ resolution: ['hd', '4k'] }, facts), true);
+  assert.equal(mediaMatches({ dynamicRange: ['hdr'] }, facts), true, 'Dolby Vision counts as HDR');
+  assert.equal(mediaMatches({ dynamicRange: ['sdr'] }, facts), false);
+  assert.equal(mediaMatches({ ratings: ['g', 'pg'] }, facts), true, 'ratings ignore case');
+  assert.equal(mediaMatches({ labels: ['date night'] }, facts), true);
+  assert.equal(mediaMatches({ labels: ['Kids'] }, facts), false);
+  assert.equal(mediaMatches({ shape: 'wide', ratings: ['R'] }, facts), false, 'every group must match');
+  const { parseConfig } = await import('../dist/config.js');
+  const log = { debug() {}, info() {}, warn() {}, error() {} };
+  const [sensor, button] = parseConfig({ sensors: [
+    { id: 'a', name: 'a', type: 'occupancy', state: 'playing', media: { shape: 'round', resolution: ['4k', '8k'], ratings: [], labels: ['Kids', 'Kids'] } },
+    { id: 'b', name: 'b', type: 'button', events: ['play'], media: { shape: 'wide' } },
+  ] }, log).sensors;
+  assert.deepEqual(sensor.media, { resolution: ['4k'], labels: ['Kids'] });
+  assert.deepEqual(button.media, {}, 'buttons have no media conditions');
+});
+
 test('older configs keep their meaning', async () => {
   const { parseConfig } = await import('../dist/config.js');
   const log = { debug() {}, info() {}, warn() {}, error() {} };

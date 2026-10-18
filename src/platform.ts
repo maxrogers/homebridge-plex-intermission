@@ -14,6 +14,7 @@ import { PlexTv } from './plex/plex-tv.js';
 import { PlexHttpError, PlexServer } from './plex/server.js';
 import { WebhookServer } from './plex/webhook-server.js';
 import { SensorAccessory } from './sensors/sensor-accessory.js';
+import { configFingerprint } from './runtime.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import { serverToken, Storage } from './storage.js';
 
@@ -98,6 +99,7 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
   private readonly controllers: Controller[] = [];
   private webhooks?: WebhookServer;
   private dailyTimer?: NodeJS.Timeout;
+  private readonly fingerprint: string;
 
   constructor(
     private readonly logging: Logging,
@@ -106,6 +108,7 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
   ) {
     this.log = this.createLogger();
     this.settings = parseConfig(config, this.log);
+    this.fingerprint = configFingerprint(config);
     this.api.on('didFinishLaunching', () => {
       this.start().catch((error: unknown) => this.log.error('Could not start: %s', error instanceof Error ? error.message : String(error)));
     });
@@ -128,6 +131,9 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
     const hubs = this.syncAccessories().map((accessory) => new SensorHub(accessory, commands));
 
     const storage = new Storage(this.api.user.storagePath());
+    // Lets the settings page show whether the saved settings are running or need a restart.
+    await storage.writeRunning({ fingerprint: this.fingerprint, startedAt: new Date().toISOString() })
+      .catch((error: unknown) => this.log.debug('Could not record the running settings: %s', String(error)));
     const credentials = await storage.readCredentials();
     const servers = this.settings.servers;
     if (!credentials?.setupId || servers.length === 0 || credentials.setupId !== this.settings.setupId) {
@@ -172,6 +178,7 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
         webhooks: feed,
         getMarkers: (ratingKey) => markers.get(ratingKey),
         hasCredits: hasCredits(server.id),
+        getFacts: (ratingKey) => plex.facts(ratingKey),
         sensors: hubs.map((hub) => hub.output(index)),
       });
       this.controllers.push(controller);
@@ -250,7 +257,8 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
         this.accessories.set(uuid, accessory);
         created.push(accessory);
       } else if (accessory.displayName !== sensor.name) {
-        accessory.displayName = sensor.name;
+        // updateDisplayName also renames the HAP accessory; assigning displayName does not.
+        accessory.updateDisplayName(sensor.name);
         renamed.push(accessory);
       }
       accessory.context.sensorId = sensor.id;

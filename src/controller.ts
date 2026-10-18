@@ -1,13 +1,14 @@
 import type { EventEmitter } from 'node:events';
 
-import { WEBHOOK_EVENTS, type IntermissionConfig, type SensorConfig, type ServerConfig, type TriggerEvent } from './config.js';
+import { hasMediaConditions, WEBHOOK_EVENTS, type IntermissionConfig, type SensorConfig, type ServerConfig, type TriggerEvent } from './config.js';
 import type { Clock, TimerHandle } from './engine/clock.js';
 import { PlaybackEngine } from './engine/engine.js';
 import type { EngineEvent, Logger, Marker, PlayingNotification, SessionInfo, WebhookEvent } from './engine/types.js';
 import { webhookFromPayload } from './plex/convert.js';
 import type { PlexWebhookPayload } from './plex/types.js';
 import { PlexHttpError } from './plex/server.js';
-import { contextOf, matchesFilters, stateHolds, type MatchContext } from './sensors/rules.js';
+import type { MediaFacts } from './plex/media-facts.js';
+import { contextOf, matchesFilters, mediaMatches, stateHolds, type MatchContext } from './sensors/rules.js';
 
 /** The parts of PlexServer the controller uses. */
 export interface ServerApi {
@@ -54,6 +55,8 @@ export interface ControllerOptions {
   getMarkers(ratingKey: string): Promise<readonly Marker[]>;
   /** Whether an item can have credits; see EngineDependencies.hasCredits. */
   hasCredits?(media: SessionInfo['media']): boolean | Promise<boolean>;
+  /** Picture, rating and labels of an item, for sensors with media conditions. */
+  getFacts?(ratingKey: string): Promise<MediaFacts | undefined>;
   sensors: readonly SensorOutput[];
   /** Called once when Plex rejects the saved sign-in. */
   onUnauthorized?(): void;
@@ -63,6 +66,9 @@ const WEBHOOK_ONLY = new Set<string>(WEBHOOK_EVENTS);
 
 /** How long sensors keep their state from before a restart when Plex cannot be read. */
 const STARTUP_GRACE_MS = 20_000;
+
+/** Media details kept per item; plenty for a night of TV. */
+const FACTS_CACHE_SIZE = 200;
 
 /**
  * Connects Plex to the sensors: notifications and webhooks go into the playback engine, engine
@@ -80,6 +86,9 @@ export class Controller {
   private resyncing = false;
   private unauthorized = false;
   private stopped = true;
+  /** Media details by rating key: a value once read, or null while reading or when Plex had none. */
+  private readonly facts = new Map<string, MediaFacts | null>();
+  private readonly needsFacts: boolean;
 
   constructor(private readonly options: ControllerOptions) {
     this.engine = new PlaybackEngine({
@@ -90,6 +99,7 @@ export class Controller {
       hasCredits: options.hasCredits,
     }, options.config.engine);
 
+    this.needsFacts = options.getFacts !== undefined && options.sensors.some((s) => s.config.type !== 'button' && hasMediaConditions(s.config.media));
     this.engine.on('event', (event) => this.onEngineEvent(event));
     options.stream.on('playing', (notification) => this.engine.handleNotification(notification));
     options.stream.on('connected', () => {
@@ -236,7 +246,8 @@ export class Controller {
         continue;
       }
       const matching = snapshots.filter((snapshot) => snapshot.session !== undefined
-        && matchesFilters(sensor.config.filters, contextOf(snapshot.session, undefined, this.options.server.id)));
+        && matchesFilters(sensor.config.filters, contextOf(snapshot.session, undefined, this.options.server.id))
+        && (!hasMediaConditions(sensor.config.media) || mediaMatches(sensor.config.media, this.factsFor(snapshot.session.media))));
       // "Nothing playing" is on while no matching player is busy; the rest are on while any player meets them.
       const holding = matching.find((snapshot) => stateHolds(condition, snapshot, sensor.config.except));
       updates.push({
@@ -249,6 +260,32 @@ export class Controller {
     for (const { sensor, active, session } of [...updates.filter((u) => !u.active), ...updates.filter((u) => u.active)]) {
       sensor.setActive(active, { session });
     }
+  }
+
+  /**
+   * Media details for an item, or undefined until they are read. The first request starts the read;
+   * the states are refreshed again when it finishes, so a matching sensor turns on a moment later.
+   */
+  private factsFor(media: SessionInfo['media']): MediaFacts | undefined {
+    if (!this.needsFacts || media.live || !media.ratingKey) {
+      return undefined;
+    }
+    const known = this.facts.get(media.ratingKey);
+    if (known !== undefined) {
+      return known ?? undefined;
+    }
+    this.facts.set(media.ratingKey, null);
+    if (this.facts.size > FACTS_CACHE_SIZE) {
+      this.facts.delete(this.facts.keys().next().value!);
+    }
+    void this.call(() => this.options.getFacts!(media.ratingKey), undefined).then((facts) => {
+      if (facts) {
+        this.facts.set(media.ratingKey, facts);
+        this.options.log.debug('Media details for "%s": %j', media.title, facts);
+        this.refreshStates();
+      }
+    });
+    return undefined;
   }
 
   private scheduleResync(): void {

@@ -146,3 +146,43 @@ test('changing servers keeps choices and sensors consistent', async () => {
   const switched = reconcileSensors([{ id: 'x', filters: { libraries: ['a/2'] } }], onlyB, ['a'], known);
   assert.deepEqual(switched[0].filters.libraries, ['b/1']);
 });
+
+test('adding a preset alongside or in place of existing sensors', async () => {
+  const { applyPreset, groupIntact } = await import('../homebridge-ui/public/model.js');
+  const selection = { allPlayers: true, players: [], allUsers: true, users: [], allLibraries: true, libraries: [] };
+  const mine = [
+    { id: 's-mine', name: 'Media Playing', type: 'occupancy', state: 'playing', except: [], filters: { players: ['ATV'], users: [], libraries: [], mediaTypes: [] }, run: { on: ['c-1'], off: [], press: [] } },
+    { id: 's-other', name: 'Projector', type: 'occupancy', state: 'playing', except: [], filters: { players: [], users: [], libraries: [], mediaTypes: [] } },
+  ];
+
+  const along = applyPreset(mine, 'states', selection, 'alongside');
+  assert.equal(along.length, 6);
+  assert.deepEqual(along.slice(2).map((s) => s.name), ['Media Playing 2', 'Media Paused', 'Credits Rolling', 'Nothing Playing'], 'clashing names get a number');
+  const group = along[2].group;
+  assert.match(group, /^states:/);
+  assert.ok(along.slice(2).every((s) => s.group === group), 'Every State is one group');
+  assert.equal(groupIntact(along.slice(2)), true);
+
+  const replaced = applyPreset(mine, 'states', selection, 'replace');
+  assert.equal(replaced.length, 4, 'the old sensors are gone');
+  assert.equal(replaced[0].id, 's-mine', 'same name keeps the sensor (and its Home automations)');
+  assert.deepEqual(replaced[0].run.on, ['c-1']);
+  assert.deepEqual(replaced[0].except, ['credits'], 'but it now works as the preset says');
+  assert.equal(groupIntact(replaced), false, 'its own players differ from the rest, so the set may overlap');
+
+  const edited = along.slice(2).map((s, i) => (i === 1 ? { ...s, except: [] } : s));
+  assert.equal(groupIntact(edited), false);
+  assert.equal(groupIntact(along.slice(2, 5)), false, 'a member removed');
+
+  const single = applyPreset([], 'credits', selection);
+  assert.equal(single.length, 1);
+  assert.equal(single[0].group, undefined, 'single-sensor presets are not grouped');
+});
+
+test('media conditions read as part of the summary', async () => {
+  const { summarize, describeFacts } = await import('../homebridge-ui/public/model.js');
+  const sensor = { name: 'Wide', type: 'occupancy', state: 'playing', except: [], filters: { players: [], users: [], libraries: [], mediaTypes: [] }, media: { shape: 'wide', ratings: ['G', 'PG'] } };
+  assert.equal(summarize(sensor), 'On while playing, on any player, for anything with a wide picture, rated G or PG, by anyone.');
+  assert.deepEqual(describeFacts({ aspectRatio: 2.39, resolution: '4k', dynamicRange: 'dv', contentRating: 'PG-13', labels: ['Kids'] }),
+    { shape: 'Wide 2.39:1', shapeValue: 'wide', resolution: '4K', dynamicRange: 'Dolby Vision', rating: 'PG-13', labels: ['Kids'] });
+});

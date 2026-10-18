@@ -15,6 +15,8 @@ class IntermissionUiServer extends HomebridgePluginUiServer {
 
     this.handle('/status', (body) => service.status(typeof body.setupId === 'string' ? body.setupId : undefined));
     this.handle('/about', () => service.about());
+    this.handle('/runtime', (body) => service.runtime(body.config ?? {}));
+    this.handle('/nowplaying', (body) => service.nowPlaying(body.servers ?? []));
     this.handle('/plexpass/ack', () => service.acknowledgePlexPass());
     // Runs a command once with sample values, so it can be checked from Settings.
     const quiet = { debug() {}, info() {}, warn() {}, error() {} };

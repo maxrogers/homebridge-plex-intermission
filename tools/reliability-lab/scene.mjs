@@ -167,21 +167,5 @@ await hub.disconnect();
 await stopHomebridge();
 await plex.close();
 
-const results = {
-  label: process.argv[2] ?? 'run',
-  rigs: rigs.map((r, i) => ({
-    name: r.name,
-    correct: checks.filter((c) => c.got[r.name] === c.want).length,
-    total: checks.length,
-    commands: r.light.commands.length,
-    perPhase: phases.slice(0, -1).map((p, j) => ({ phase: p.name, commands: phases[j + 1].commands[i] - p.commands[i] })),
-    log: r.light.commands.map((c) => ({ at: ((c.at - t0) / 1000).toFixed(1), from: c.from, to: c.to, why: c.why })),
-  })),
-  checks,
-  hubEvents: hub.events.map((e) => ({ at: ((e.at - t0) / 1000).toFixed(1), ...e })),
-  plexLog: plex.log.map((e) => ({ ...e, at: ((e.at - t0) / 1000).toFixed(1) })),
-};
-await writeFile(new URL(`./results-${process.argv[2] ?? 'run'}.json`, import.meta.url), JSON.stringify(results, null, 2));
-await writeFile(new URL(`./homebridge-${process.argv[2] ?? 'run'}.log`, import.meta.url), stripVTControlCharacters(hbLog));
-for (const r of results.rigs) say(`${r.name}: ${r.correct}/${r.total} checks right, ${r.commands} light commands`);
+await writeFile(new URL(`./homebridge-${process.argv[2] ?? 'scene'}.log`, import.meta.url), stripVTControlCharacters(hbLog));
 process.exit(0);

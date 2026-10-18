@@ -6,6 +6,8 @@ import { DEFAULT_WEBHOOK_PORT } from './config.js';
 import { discover, type Discovery } from './plex/discovery.js';
 import { connectionCandidates, type PlexPin, PlexTv } from './plex/plex-tv.js';
 import { PlexHttpError, PlexServer, type PlexServerPrefs } from './plex/server.js';
+import type { MediaFacts } from './plex/media-facts.js';
+import { configFingerprint } from './runtime.js';
 import { serverToken, type Credentials, type Storage } from './storage.js';
 
 const SIGN_IN_TIMEOUT_MS = 10 * 60 * 1000;
@@ -157,6 +159,37 @@ export class SetupService {
     await this.options.storage.writeCredentials({ accountToken: token, username, savedAt: new Date(this.now()).toISOString(), setupId });
     await this.options.storage.recordPlexPass(user.plexPass, new Date(this.now()));
     return { done: true, username, plexPass: user.plexPass, setupId };
+  }
+
+  /**
+   * Whether Intermission is running with these saved settings. `running` is false until Homebridge
+   * has started the plugin once; `current` is false while saved changes wait for a restart.
+   */
+  async runtime(config: unknown): Promise<{ running: boolean; current: boolean; startedAt?: string }> {
+    const record = await this.options.storage.readRunning();
+    return { running: record !== undefined, current: record?.fingerprint === configFingerprint(config), startedAt: record?.startedAt };
+  }
+
+  /** What is playing now on the chosen servers, with the details media conditions can use. */
+  async nowPlaying(servers: readonly ServerRef[]): Promise<{
+    server: string; player: string; user?: string; title: string; type: string; library?: string; live: boolean; facts?: MediaFacts;
+  }[]> {
+    const credentials = await this.credentials();
+    const lists = await Promise.all(servers.map(async (ref) => {
+      const plex = await this.plexServer(ref, credentials);
+      const sessions = await plex.sessions().catch(() => []);
+      return Promise.all(sessions.map(async (session) => ({
+        server: ref.name,
+        player: session.playerTitle ?? session.playerId,
+        user: session.user,
+        title: session.media.title,
+        type: session.media.type,
+        library: session.media.librarySectionTitle,
+        live: session.media.live === true,
+        facts: session.media.live ? undefined : await plex.facts(session.media.ratingKey).catch(() => undefined),
+      })));
+    }));
+    return lists.flat();
   }
 
   acknowledgePlexPass(): Promise<void> {

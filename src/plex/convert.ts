@@ -1,6 +1,9 @@
 import type { Marker, MediaInfo, PlaybackState, PlayingNotification, SessionInfo, WebhookEvent } from '../engine/types.js';
 import type { PlexMarker, PlexMetadata, PlexNotificationContainer, PlexPlayer, PlexWebhookPayload } from './types.js';
 
+/** The library key Live TV gets, per server (`serverId/livetv`). */
+export const LIVE_TV_SECTION = 'livetv';
+
 const PLAYBACK_STATES = new Set<string>(['playing', 'paused', 'buffering', 'stopped']);
 
 export function toNumber(value: unknown): number | undefined {
@@ -8,7 +11,7 @@ export function toNumber(value: unknown): number | undefined {
   return typeof number === 'number' && Number.isFinite(number) ? number : undefined;
 }
 
-function toBoolean(value: unknown): boolean | undefined {
+export function toBoolean(value: unknown): boolean | undefined {
   if (value === undefined || value === null || value === '') {
     return undefined;
   }
@@ -20,13 +23,16 @@ function toMedia(metadata: PlexMetadata): MediaInfo {
     ? `${metadata.grandparentTitle}: ${metadata.title}`
     : (metadata.title ?? '');
   const section = metadata.librarySectionID;
+  const live = toBoolean(metadata.live) === true;
   return {
     ratingKey: String(metadata.ratingKey ?? ''),
     title,
     type: metadata.type ?? 'unknown',
     durationMs: toNumber(metadata.duration),
-    librarySectionId: section === undefined ? undefined : String(section),
-    librarySectionTitle: metadata.librarySectionTitle,
+    // Live TV has no library section; it is filtered as a "Live TV" library of its server.
+    librarySectionId: live ? LIVE_TV_SECTION : (section === undefined ? undefined : String(section)),
+    librarySectionTitle: live ? 'Live TV' : metadata.librarySectionTitle,
+    ...(live ? { live } : {}),
   };
 }
 

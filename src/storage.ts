@@ -2,6 +2,8 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import type { RunningRecord } from './runtime.js';
+
 export interface Credentials {
   /** plex.tv account token, used for plex.tv requests. */
   accountToken: string;
@@ -83,6 +85,22 @@ export class Storage {
     if (record && !record.acknowledged) {
       await this.writeJson(this.plexPassFile, { ...record, acknowledged: true });
     }
+  }
+
+  private get runningFile(): string {
+    return join(this.directory, 'running.json');
+  }
+
+  /** Written by the plugin at start; read by the settings page. */
+  async writeRunning(record: RunningRecord): Promise<void> {
+    await this.writeJson(this.runningFile, record);
+  }
+
+  async readRunning(): Promise<RunningRecord | undefined> {
+    const value = await this.readJson(this.runningFile);
+    return value && typeof value.fingerprint === 'string' && typeof value.startedAt === 'string'
+      ? { fingerprint: value.fingerprint, startedAt: value.startedAt }
+      : undefined;
   }
 
   /** Removes the sign-in and Plex Pass history. Keeps the client id and webhook key. */

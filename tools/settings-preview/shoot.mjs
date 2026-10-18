@@ -16,8 +16,14 @@ const shots = [
   ['commands', async (p) => { await p.click('[data-action=tab][data-id=advanced]'); await p.click('[data-action=toggle-open][data-id=advanced]'); await p.click('[data-action=test-command][data-id=c-1]'); }, 2600],
   ['edit-cmd', async (p) => p.click('[data-action=edit][data-id=s-1]'), 1800],
   ['recipes', async (p) => p.click('[data-action=tab][data-id=recipes]'), 1400],
+  ['preset-choice', async (p) => { await p.click('[data-action=toggle-presets]'); await p.click('[data-action=pick-preset][data-id=credits]'); }, 1400],
+  ['preset-list', async (p) => p.click('[data-action=toggle-presets]'), 1400],
+  ['edit-credits', async (p) => p.click('[data-action=edit][data-id=s-4]'), 1700],
+  ['edit-media', async (p) => { await p.click('[data-action=edit][data-id=s-6]'); await p.click('[data-action=now-playing]'); await p.waitForTimeout(200); }, 2400],
+  ['restart', null, 900],
 ];
-const base = (s) => ({ 'settings-open': 'advanced', reset: 'advanced', webhooks: 'server', 'choose-some': 'choose', template: 'choose', review: 'main', remove: 'edit' }[s] ?? s);
+const query = { restart: '&runtime=stale&port=free' };
+const base = (s) => ({ 'preset-choice': 'main', 'preset-list': 'main', 'edit-credits': 'main', 'edit-media': 'main', restart: 'main',  'settings-open': 'advanced', reset: 'advanced', webhooks: 'server', 'choose-some': 'choose', template: 'choose', review: 'main', remove: 'edit' }[s] ?? s);
 const errors = [];
 const titles = [];
 for (const [s, act, h] of shots) {
@@ -26,7 +32,7 @@ for (const [s, act, h] of shots) {
     const page = await browser.newPage({ viewport: { width: 820, height: h } });
     page.on('pageerror', (e) => errors.push(`${s}: ${e.message}`));
     page.on('console', (m) => m.type() === 'error' && errors.push(`${s}: ${m.text()}`));
-    await page.goto(`http://localhost:8765/?s=${base(s)}${dark ? '&dark=1' : ''}`);
+    await page.goto(`http://localhost:8765/?s=${base(s)}${query[s] ?? ''}${dark ? '&dark=1' : ''}`);
     await page.waitForTimeout(400);
     if (act) { await act(page); await page.waitForTimeout(300); }
     titles.push(`${s}${dark ? '-dark' : ''}: ${await page.title()}`);

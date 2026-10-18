@@ -39,6 +39,18 @@ export interface SensorFilters {
   mediaTypes: string[];
 }
 
+/**
+ * Conditions on what is playing, read from the library item when play starts. Each set group must
+ * match (any of its values); an empty object means no conditions.
+ */
+export interface MediaConditions {
+  shape?: 'wide' | 'standard';
+  resolution?: ('4k' | 'hd' | 'sd')[];
+  dynamicRange?: ('dv' | 'hdr' | 'sdr')[];
+  ratings?: string[];
+  labels?: string[];
+}
+
 export interface SensorConfig {
   id: string;
   name: string;
@@ -52,6 +64,8 @@ export interface SensorConfig {
   /** For buttons. */
   events: TriggerEvent[];
   filters: SensorFilters;
+  /** State sensors only. */
+  media: MediaConditions;
 }
 
 export interface ServerConfig {
@@ -177,6 +191,30 @@ function parseServers(value: unknown[]): ServerConfig[] {
   });
 }
 
+function parseMedia(value: unknown): MediaConditions {
+  const raw = asRecord(value);
+  const pick = <T extends string>(allowed: readonly T[]) => (list: unknown): T[] | undefined => {
+    const values = asStrings(list).filter((v): v is T => (allowed as readonly string[]).includes(v));
+    return values.length > 0 ? [...new Set(values)] : undefined;
+  };
+  const strings = (list: unknown) => {
+    const values = [...new Set(asStrings(list))];
+    return values.length > 0 ? values : undefined;
+  };
+  const conditions: MediaConditions = {
+    shape: raw.shape === 'wide' || raw.shape === 'standard' ? raw.shape : undefined,
+    resolution: pick(['4k', 'hd', 'sd'] as const)(raw.resolution),
+    dynamicRange: pick(['dv', 'hdr', 'sdr'] as const)(raw.dynamicRange),
+    ratings: strings(raw.ratings),
+    labels: strings(raw.labels),
+  };
+  return Object.fromEntries(Object.entries(conditions).filter(([, v]) => v !== undefined)) as MediaConditions;
+}
+
+export function hasMediaConditions(conditions: MediaConditions): boolean {
+  return Object.keys(conditions).length > 0;
+}
+
 function parseSensors(value: unknown, log: Logger): SensorConfig[] {
   if (!Array.isArray(value)) {
     return [];
@@ -211,6 +249,7 @@ function parseSensors(value: unknown, log: Logger): SensorConfig[] {
         libraries: asStrings(filters.libraries),
         mediaTypes: asStrings(filters.mediaTypes),
       },
+      media: type === 'button' ? {} : parseMedia(sensor.media),
     };
     if (type === 'button') {
       parsed.events = asStrings(sensor.events).filter((event): event is TriggerEvent => known.has(event));

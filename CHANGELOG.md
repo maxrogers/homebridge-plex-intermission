@@ -55,5 +55,17 @@ Initial development.
   exactly one of the four sensors is on at any moment, including through a mid-credits scene.
 - Sensors keep their state across Homebridge restarts until Plex has been read, so lights don't jump on restart.
 - State changes are published before button presses, offs before ons, so automations never see two states at once.
+- "Credits behavior" is now "What counts as the credits": Scenes count as playing (default), Scenes count as credits,
+  Final credits only. Shown under any sensor that follows the credits, labelled as shared, as well as in Settings.
+- Add preset on the Sensors tab and "Add this preset" in the Guide: add alongside existing sensors, or replace them
+  (same-name sensors keep their Home automations). Every State is shown as a group with "Remove set".
+- Live TV: listed per server when the server has a tuner or DVR, not chosen by default, never gets credits.
+- Media conditions: a state sensor can require a picture shape, resolution, HDR, rating or labels, read from the
+  library item when play starts. The editor's Now playing panel shows what Plex reports, with "+ condition".
+- Restart banner: the settings page says when changes are unsaved or saved but not running yet. The webhook port dot
+  is amber while a restart is due and red when nothing is listening.
+- The Guide starts with Good to know, then a Presets section and ideas beyond the presets.
+- Commands show a short safety note; the name field example is "Projector Control".
+- Fixed: renaming a sensor now renames the cached accessory too (`updateDisplayName`).
 - Credits fall back to 95% of the runtime for movies and episodes without a marker, with or without Plex Pass.
   Music, photos and other videos never get a credits event.

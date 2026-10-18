@@ -18,7 +18,8 @@ const discovery = {
       { id: '2', key: 'srv/2', title: 'TV Shows', type: 'show', kind: 'show' },
       { id: '3', key: 'srv/3', title: 'Music', type: 'artist', kind: 'music' },
       { id: '4', key: 'srv/4', title: 'Photos', type: 'photo', kind: 'photo' },
-      { id: '5', key: 'srv/5', title: 'Home Videos', type: 'movie', kind: 'other' } ] },
+      { id: '5', key: 'srv/5', title: 'Home Videos', type: 'movie', kind: 'other' },
+      { id: 'livetv', key: 'srv/livetv', title: 'Live TV', type: 'livetv', kind: 'livetv' } ] },
     { id: 'cab', name: 'Cabin', libraries: [{ id: '1', key: 'cab/1', title: 'Kids Movies', type: 'movie', kind: 'movie' }] },
   ],
 };
@@ -33,16 +34,17 @@ if (['main', 'edit', 'advanced', 'recipes', 'review', 'ended', 'nopass-adv', 'co
     { key: 'srv/1', title: 'Movies', kind: 'movie', serverId: 'srv', serverName: 'Unraid' }, { key: 'srv/2', title: 'TV Shows', kind: 'show', serverId: 'srv', serverName: 'Unraid' }] };
   const f = () => ({ players: ['ATV'], users: [], libraries: ['srv/1', 'srv/2'], mediaTypes: [] });
   config.sensors = [
-    { id: 's-1', name: 'Media Playing', type: 'occupancy', state: 'playing', except: ['credits'], filters: f(), run: { on: ['c-1'], off: [], press: [] } },
-    { id: 's-3', name: 'Media Paused', type: 'occupancy', state: 'paused', except: ['credits'], filters: f() },
-    { id: 's-4', name: 'Credits Rolling', type: 'occupancy', state: 'credits', except: [], filters: f() },
-    { id: 's-5', name: 'Nothing Playing', type: 'occupancy', state: 'idle', except: [], filters: f() },
+    { id: 's-1', name: 'Media Playing', type: 'occupancy', state: 'playing', except: ['credits'], filters: f(), run: { on: ['c-1'], off: [], press: [] }, group: 'states:ab12' },
+    { id: 's-3', name: 'Media Paused', type: 'occupancy', state: 'paused', except: ['credits'], filters: f(), group: 'states:ab12' },
+    { id: 's-4', name: 'Credits Rolling', type: 'occupancy', state: 'credits', except: [], filters: f(), group: 'states:ab12' },
+    { id: 's-5', name: 'Nothing Playing', type: 'occupancy', state: 'idle', except: [], filters: f(), group: 'states:ab12' },
+    { id: 's-6', name: 'Wide Movie', type: 'occupancy', state: 'playing', except: [], filters: f(), media: { shape: 'wide' } },
   ];
   config.preset = 'states';
   if (scenario === 'commands' || scenario === 'edit-cmd') config.commands = { enabled: true, list: [{ id: 'c-1', name: 'Projector wide', command: 'curl -s http://projector.local/lens?memory={type}' }, { id: 'c-2', name: 'Log title', command: 'echo {title} >> /homebridge/watched.log' }] };
 }
 if (scenario === 'choose') config.servers = [{ id: 'srv', name: 'Unraid', url: 'http://x' }, { id: 'cab', name: 'Cabin', url: 'http://y' }];
-const hook = { plexPass: true, port: 32550, portState: scenario === 'webhooks' ? 'other' : 'intermission', serverSettings: [{ name: 'Unraid', enabled: false }], url: 'http://10.0.0.5:32550/3f9a0c1d2e4b5a6978c0d1e2f3a4b5c6', registered: false, others: ['http://10.69.1.2:32599', 'https://notifiarr.example/api/v1/plex'], stale: ['http://10.69.1.9:32550/3f9a0c1d2e4b5a6978c0d1e2f3a4b5c6'], disabledOn: ['Unraid'] };
+const hook = { plexPass: true, port: 32550, portState: scenario === 'webhooks' ? 'other' : (qs.get('port') ?? 'intermission'), serverSettings: [{ name: 'Unraid', enabled: false }], url: 'http://10.0.0.5:32550/3f9a0c1d2e4b5a6978c0d1e2f3a4b5c6', registered: false, others: ['http://10.69.1.2:32599', 'https://notifiarr.example/api/v1/plex'], stale: ['http://10.69.1.9:32550/3f9a0c1d2e4b5a6978c0d1e2f3a4b5c6'], disabledOn: ['Unraid'] };
 const report = 'Intermission 0.1.0\nHomebridge UI 5.9.0, Docker, Node.js v24.3.0\n\nPlex account: Steve\nPlex Pass: yes\n\nServer: Unraid (http://10.0.0.2:32400)\n  Version: 1.41.6\n  Credits detection: as a scheduled task and when media is added\n  Webhooks setting: on\n  Library 1: Movies (movie, tv.plex.agents.movie)\n\nSensors: 4';
 const preset = qs.get('existing');
 if (preset) {
@@ -75,6 +77,11 @@ window.homebridge = {
       case '/report': return report;
       case '/commands/test': return { code: 0, output: 'OK: lens memory 2', timedOut: false };
       case '/about': return { version: '0.1.0', node: 'v24.3.0', repo: 'https://github.com/maxrogers/homebridge-plex-intermission', issues: 'https://github.com/maxrogers/homebridge-plex-intermission/issues', funding: 'https://ko-fi.com/maxrogers' };
+      case '/runtime': return { none: { running: false, current: false }, stale: { running: true, current: false } }[qs.get('runtime')] ?? { running: true, current: true };
+      case '/nowplaying': return [
+        { server: 'Unraid', player: 'Living Room', user: 'Steve', title: 'Dune: Part Two', type: 'movie', library: 'Movies', live: false,
+          facts: { aspectRatio: 2.39, resolution: '4k', dynamicRange: 'dv', contentRating: 'PG-13', labels: ['Date Night'] } },
+        { server: 'Unraid', player: 'Bedroom TV', user: 'Kids', title: 'KSL 5 News', type: 'episode', library: 'Live TV', live: true } ];
       case '/webhook/update': return { ...hook, registered: true, stale: [], disabledOn: [], serverSettings: [{ name: 'Unraid', enabled: true }] };
     }  },
 };

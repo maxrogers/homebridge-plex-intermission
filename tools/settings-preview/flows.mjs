@@ -194,7 +194,129 @@ await flow('scratch: no sensors created, board shows the add buttons', async () 
   await click(page, '[data-action=pick-template][data-id=scratch]');
   await click(page, '[data-action=finish]');
   assert.equal((await config(page)).sensors.length, 0);
-  assert.ok(await page.$('[data-action=add-template][data-id=credits]'));
+  assert.ok(await page.$('[data-action=toggle-presets]'), 'Add preset is offered');
+});
+
+await flow('Live TV is listed per server but not preselected', async () => {
+  const { page } = await open({ s: 'server', servers: 'srv' });
+  await click(page, '[data-action=webhooks-next]');
+  await page.waitForTimeout(300);
+  assert.ok(await page.$('[data-action=toggle-library][data-id="srv/livetv"]'));
+  assert.ok(!(await selectedLibraries(page)).includes('srv/livetv'));
+});
+
+await flow('Add preset on an empty board adds it at once', async () => {
+  const { page } = await open({ s: 'main', existing: JSON.stringify({ platform: 'PlexIntermission', setupId: 'x', servers: [{ id: 'srv', name: 'Unraid', url: 'http://srv' }], sensors: [],
+    selection: { players: [], allPlayers: true, allUsers: true, users: [], allLibraries: true, libraries: [] } }) });
+  await click(page, '[data-action=toggle-presets]');
+  await click(page, '[data-action=pick-preset][data-id=states]');
+  const c = await config(page);
+  assert.deepEqual(c.sensors.map((x) => x.name), ['Media Playing', 'Media Paused', 'Credits Rolling', 'Nothing Playing']);
+  assert.equal(c.preset, 'states');
+  assert.ok(await page.$('.im-group'), 'shown as a group');
+  assert.equal(await page.$('.im-group .im-hint'), null, 'intact: no warning');
+});
+
+await flow('Add preset with sensors: alongside keeps them; replace needs two taps and keeps same-name sensors', async () => {
+  const { page, errors } = await open({ s: 'main' });
+  await click(page, '[data-action=toggle-presets]');
+  await click(page, '[data-action=pick-preset][data-id=credits]');
+  assert.ok(await page.$('#im-preset-choice'));
+  await click(page, '[data-action=preset-alongside]');
+  let c = await config(page);
+  assert.equal(c.sensors.length, 6);
+  assert.equal(c.sensors[5].name, 'Media Playing 2');
+
+  await click(page, '[data-action=toggle-presets]');
+  await click(page, '[data-action=pick-preset][data-id=states]');
+  await click(page, '[data-action=preset-replace]');
+  assert.equal((await config(page)).sensors.length, 6, 'first tap only asks');
+  assert.match(await page.textContent('#im-preset-choice'), /Home automations that use them stop working/);
+  await click(page, '[data-action=preset-replace]');
+  c = await config(page);
+  assert.equal(c.sensors.length, 4);
+  assert.equal(c.sensors.find((x) => x.name === 'Media Playing').id, 's-1', 'same name keeps its identity');
+  assert.deepEqual(errors, []);
+});
+
+await flow('Every State group: editing shows the warning; Remove set removes all four', async () => {
+  const { page } = await open({ s: 'main' });
+  assert.equal(await page.$('.im-group .im-hint'), null);
+  await click(page, '[data-action=edit][data-id=s-3]');
+  await click(page, '[data-action=toggle-except][data-id=credits]');
+  assert.ok(await page.$('.im-group .im-hint'), 'warning after an edit');
+  await click(page, '[data-action=remove-group]');
+  await click(page, '[data-action=remove-group]');
+  const c = await config(page);
+  assert.deepEqual(c.sensors.map((x) => x.id), ['s-6']);
+});
+
+await flow('Guide: Add this preset leads to the choice on the Sensors tab', async () => {
+  const { page } = await open({ s: 'main' });
+  await click(page, '[data-action=tab][data-id=recipes]');
+  assert.ok(await page.$('.im-callout [aria-expanded=true]'), 'Good to know starts open');
+  await click(page, '[data-action=pick-preset][data-id=simple]');
+  assert.ok(await page.$('#im-preset-choice'));
+  assert.ok(await page.$('[data-action=tab][data-id=sensors][aria-selected=true]'));
+});
+
+await flow('credits choice in the editor is shared and matches Settings', async () => {
+  const { page } = await open({ s: 'main' });
+  await click(page, '[data-action=edit][data-id=s-1]');
+  assert.ok(await page.$('[data-action=set-credits-mode][data-id=scenes][aria-pressed=true]'));
+  await click(page, '[data-action=set-credits-mode][data-id=final]');
+  assert.equal((await config(page)).timing.midCredits, 'final');
+  await click(page, '[data-action=edit][data-id=s-4]');
+  assert.ok(await page.$('[data-action=set-credits-mode][data-id=final][aria-pressed=true]'), 'In the credits sensor shows the same choice');
+  await click(page, '[data-action=tab][data-id=advanced]');
+  assert.equal(await page.$eval('[data-credits-mode]', (el) => el.value), 'final');
+  await click(page, '[data-action=tab][data-id=sensors]');
+  await click(page, '[data-action=set-credits-mode][data-id=scenes]');
+  assert.equal((await config(page)).timing.midCredits, undefined, 'default is not stored');
+});
+
+await flow('media conditions: chips, labels and + condition from Now playing', async () => {
+  const { page, errors } = await open({ s: 'main' });
+  await click(page, '[data-action=edit][data-id=s-6]');
+  assert.ok(await page.$('[data-action=media-shape][data-id=wide][aria-pressed=true]'), 'opens with its conditions');
+  await click(page, '[data-action=media-toggle][data-group=resolution][data-id="4k"]');
+  await page.fill('[data-media-labels]', 'Date Night, Kids, Kids');
+  await page.dispatchEvent('[data-media-labels]', 'change');
+  await page.waitForTimeout(200);
+  await click(page, '[data-action=now-playing]');
+  await page.waitForTimeout(200);
+  assert.match(await page.textContent('.im-nowplaying'), /Wide 2\.39:1/);
+  assert.match(await page.textContent('.im-nowplaying'), /Live TV: Plex has no picture/);
+  await click(page, '[data-action=media-add][data-group=ratings]');
+  let c = (await config(page)).sensors.find((x) => x.id === 's-6');
+  assert.deepEqual(c.media, { shape: 'wide', resolution: ['4k'], labels: ['Date Night', 'Kids'], ratings: ['PG-13'] });
+  assert.match(await page.textContent('[data-index="4"] .im-summary'), /with a wide picture, 4K, rated PG-13/);
+  await click(page, '[data-action=media-any][data-group=ratings]');
+  await click(page, '[data-action=media-any][data-group=resolution]');
+  await click(page, '[data-action=media-shape][data-id=wide]');
+  await page.fill('[data-media-labels]', '');
+  await page.dispatchEvent('[data-media-labels]', 'change');
+  await page.waitForTimeout(200);
+  c = (await config(page)).sensors.find((x) => x.id === 's-6');
+  assert.equal(c.media, undefined, 'no conditions left: nothing stored');
+  assert.deepEqual(errors, []);
+});
+
+await flow('banners: restart needed, unsaved changes; port amber while waiting and red when not listening', async () => {
+  let { page } = await open({ s: 'main', runtime: 'stale', port: 'free' });
+  assert.match(await page.textContent('.im-banner-info'), /Restart Homebridge to apply/);
+  await click(page, '[data-action=tab][data-id=advanced]');
+  assert.ok(await page.$('#im-webhooks .im-status.warn'), 'amber while a restart is due');
+  await click(page, '[data-action=tab][data-id=sensors]');
+  await click(page, '[data-action=edit][data-id=s-1]');
+  await click(page, '[data-action=toggle-except][data-id=intro]');
+  assert.match(await page.textContent('.im-banner-info'), /unsaved changes/);
+  ({ page } = await open({ s: 'main', port: 'free' }));
+  assert.equal(await page.$('.im-banner-info'), null, 'running the saved settings: no banner');
+  await click(page, '[data-action=tab][data-id=advanced]');
+  assert.match(await page.textContent('#im-webhooks'), /Not listening/);
+  ({ page } = await open({ s: 'main', runtime: 'none' }));
+  assert.match(await page.textContent('.im-banner-info'), /Restart Homebridge to start it/);
 });
 
 console.log(results.join('\n'));

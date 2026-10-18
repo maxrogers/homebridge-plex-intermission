@@ -32,8 +32,9 @@ export class LibraryTypes {
     return this.reading;
   }
 
-  async hasCredits(serverId: string, media: { type: string; librarySectionId?: string }): Promise<boolean> {
-    if (!CREDITED_TYPES.has(media.type)) {
+  async hasCredits(serverId: string, media: { type: string; librarySectionId?: string; live?: boolean }): Promise<boolean> {
+    // Live TV: Plex only knows the scheduled length, so a percentage would land mid-broadcast.
+    if (media.live || !CREDITED_TYPES.has(media.type)) {
       return false;
     }
     const key = `${serverId}/${media.librarySectionId}`;

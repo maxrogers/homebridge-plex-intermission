@@ -1,3 +1,4 @@
+import { LIVE_TV_SECTION } from './convert.js';
 import type { PlexDevice, PlexHomeUser, PlexTv } from './plex-tv.js';
 import type { PlexLibrary, PlexServer } from './server.js';
 
@@ -14,7 +15,7 @@ export interface DiscoveredPlayer {
 }
 
 /** How the settings page presents a library. */
-export type LibraryKind = 'movie' | 'show' | 'music' | 'photo' | 'other';
+export type LibraryKind = 'movie' | 'show' | 'music' | 'photo' | 'other' | 'livetv';
 
 export interface DiscoveredLibrary extends PlexLibrary {
   /** `serverId/sectionId`, the value sensor filters store. */
@@ -78,14 +79,15 @@ export async function discover(servers: readonly ServerToDiscover[], plexTv: Ple
     settle(plexTv.devices(accountToken), [] as PlexDevice[]),
     settle(plexTv.homeUsers(accountToken), [] as PlexHomeUser[]),
     Promise.all(servers.map(async ({ id, name, server }) => {
-      const [devices, history, sessions, accounts, libraries] = await Promise.all([
+      const [devices, history, sessions, accounts, libraries, liveTv] = await Promise.all([
         settle(server.devices(), []),
         settle(server.history(), []),
         settle(server.sessions(), []),
         settle(server.accounts(), []),
         server.libraries().then((items) => ({ items }), (error: unknown) => ({ items: [] as PlexLibrary[], error })),
+        settle(server.hasLiveTv(), false),
       ]);
-      return { id, name, devices, history, sessions, accounts, libraries };
+      return { id, name, devices, history, sessions, accounts, libraries, liveTv };
     })),
   ]);
 
@@ -138,7 +140,11 @@ export async function discover(servers: readonly ServerToDiscover[], plexTv: Ple
     servers: perServer.map((server) => ({
       id: server.id,
       name: server.name,
-      libraries: server.libraries.items.map((library) => ({ ...library, key: `${server.id}/${library.id}`, kind: libraryKind(library) })),
+      libraries: [
+        ...server.libraries.items.map((library) => ({ ...library, key: `${server.id}/${library.id}`, kind: libraryKind(library) })),
+        // Live TV is not a library to Plex, but choosing it works like one.
+        ...(server.liveTv ? [{ id: LIVE_TV_SECTION, title: 'Live TV', type: 'livetv', key: `${server.id}/${LIVE_TV_SECTION}`, kind: 'livetv' as const }] : []),
+      ],
       error: 'error' in server.libraries ? describe(server.libraries.error) : undefined,
     })),
   };

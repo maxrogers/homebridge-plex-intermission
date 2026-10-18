@@ -20,22 +20,25 @@ export const CONDITIONS = {
 
 /** Conditions that can leave out the credits or intro, and what each exception means. */
 export const EXCEPTIONS = {
-  credits: { label: 'the credits', help: 'Turns off when the credits start, and follows Credits behavior in Settings for mid-credits scenes.' },
-  intro: { label: 'the intro', help: 'Turns off while an intro plays (Plex finds intros on servers with Plex Pass).' },
+  credits: { label: 'the credits', help: 'Off during the credits.' },
+  intro: { label: 'the intro', help: 'Off while an intro plays (Plex finds intros on servers with Plex Pass).' },
 };
 export const CAN_EXCEPT = ['playing', 'paused', 'active'];
 
-/** How Credits behavior reads, for showing it next to the sensors it affects. */
+/**
+ * What counts as the credits. One setting shared by every sensor, so sensors that follow the
+ * credits always agree (Every State relies on that).
+ */
 export const CREDITS_MODES = {
-  scenes: 'dims again for mid-credits scenes',
-  first: 'credits from the first credits, ignoring scenes',
-  final: 'credits from the final credits only',
+  scenes: { label: 'Scenes count as playing', help: 'Credits start at the first credits. A mid-credits scene counts as playing, then the credits resume.', default: true },
+  first: { label: 'Scenes count as credits', help: 'Credits run from the first credits to the end, including any mid-credits scenes.' },
+  final: { label: 'Final credits only', help: 'Earlier credits and mid-credits scenes count as playing. Credits start at the final credits, or the first credits if there are no scenes.' },
 };
 export function creditsMode(timing = {}) {
   return timing.midCredits ?? (timing.firstCreditsMarker === false ? 'final' : 'scenes');
 }
 
-/** Whether a sensor's behavior depends on Credits behavior. */
+/** Whether a sensor's behavior depends on what counts as the credits. */
 export function usesCredits(sensor) {
   return sensor.state === 'credits' || (CAN_EXCEPT.includes(sensor.state) && (sensor.except ?? []).includes('credits'));
 }
@@ -70,7 +73,48 @@ export const LIBRARY_KINDS = {
   other: { label: 'Other Videos', mediaTypes: ['movie'] },
   music: { label: 'Music', mediaTypes: ['track'] },
   photo: { label: 'Photos', mediaTypes: ['photo', 'clip'] },
+  livetv: { label: 'Live TV', mediaTypes: ['episode', 'movie'] },
 };
+
+/* ---------- media conditions ---------- */
+
+export const SHAPES = { wide: 'Wide (2.2:1 or wider)', standard: 'Standard (narrower than 2.2:1)' };
+export const RESOLUTIONS = { '4k': '4K', hd: 'HD', sd: 'SD' };
+export const DYNAMIC_RANGES = { hdr: 'HDR (includes Dolby Vision)', dv: 'Dolby Vision', sdr: 'SDR' };
+export const RATINGS = ['G', 'PG', 'PG-13', 'R', 'NC-17', 'TV-Y', 'TV-Y7', 'TV-G', 'TV-PG', 'TV-14', 'TV-MA', 'NR'];
+export const WIDE_ASPECT = 2.2;
+
+export function hasMediaConditions(sensor) {
+  return Object.values(sensor.media ?? {}).some((v) => (Array.isArray(v) ? v.length > 0 : v !== undefined));
+}
+
+/** Plain-language phrases for a sensor's media conditions. */
+export function mediaPhrases(media = {}) {
+  const or = (values) => (values.length <= 2 ? values.join(' or ') : `${values.slice(0, -1).join(', ')} or ${values.at(-1)}`);
+  return [
+    media.shape && (media.shape === 'wide' ? 'a wide picture' : 'a standard picture'),
+    media.resolution?.length && or(media.resolution.map((r) => RESOLUTIONS[r] ?? r)),
+    media.dynamicRange?.length && or(media.dynamicRange.map((r) => ({ hdr: 'HDR', dv: 'Dolby Vision', sdr: 'SDR' })[r] ?? r)),
+    media.ratings?.length && `rated ${or(media.ratings)}`,
+    media.labels?.length && `labeled ${or(media.labels.map((l) => `"${l}"`))}`,
+  ].filter(Boolean);
+}
+
+/** Describes media details from Plex the way the Now playing panel shows them. */
+export function describeFacts(facts) {
+  if (!facts) {
+    return {};
+  }
+  const ratio = facts.aspectRatio;
+  return {
+    shape: ratio === undefined ? undefined : `${ratio >= WIDE_ASPECT ? 'Wide' : 'Standard'} ${ratio.toFixed(2)}:1`,
+    shapeValue: ratio === undefined ? undefined : (ratio >= WIDE_ASPECT ? 'wide' : 'standard'),
+    resolution: facts.resolution ? RESOLUTIONS[facts.resolution] : undefined,
+    dynamicRange: facts.dynamicRange ? ({ hdr: 'HDR', dv: 'Dolby Vision', sdr: 'SDR' })[facts.dynamicRange] : undefined,
+    rating: facts.contentRating,
+    labels: facts.labels ?? [],
+  };
+}
 
 /** Media types the chosen libraries can play, in display order. */
 export function availableMediaTypes(libraries) {
@@ -81,7 +125,7 @@ export function availableMediaTypes(libraries) {
 /** Advanced settings. Values are stored in config `timing` in seconds; `scale` converts for display. */
 export const TIMING_FIELDS = [
   { key: 'creditsOffset', label: 'Credits offset', help: 'Wait this long after the credits marker. Never earlier than the marker.', unit: 's', min: 0, max: 120, default: 0 },
-  { key: 'rearmDistance', label: 'Credits re-arm distance', help: 'Rewinds shorter than this never change the credits state, so the rewind Plex does on resume can\'t flick the lights.', unit: 's', min: 20, max: 600, default: 60 },
+  { key: 'rearmDistance', label: 'Credits re-arm distance', help: 'Rewinds shorter than this never change the credits state, so the rewind Plex does on resume can\'t flick a sensor.', unit: 's', min: 20, max: 600, default: 60 },
   { key: 'pauseDebounce', label: 'Pause debounce', help: 'Pauses shorter than this are ignored.', unit: 's', min: 0, max: 30, default: 2 },
   { key: 'stopHold', label: 'Stop hold', help: 'Waits this long after a stop, so autoplaying the next episode is not a stop.', unit: 's', min: 0, max: 60, default: 10 },
   { key: 'minItemLength', label: 'Minimum item length', help: 'Shorter items, such as trailers, are ignored. 0 turns this off.', unit: 'min', scale: 60, min: 0, max: 60, default: 0 },
@@ -135,7 +179,7 @@ export const PRESETS = [
     creditsAware: true,
     tagline: 'One sensor. Lights up for the credits too.',
     recommended: true,
-    about: 'Like Simple, but the sensor also turns off for the credits. By default it turns back on for a mid-credits scene and off again after it (Credits behavior in Settings).',
+    about: 'Like Simple, but the sensor also turns off for the credits. By default it turns back on for a mid-credits scene and off again after it (What counts as the credits, in Settings).',
     sensors: [
       { name: 'Media Playing', type: 'occupancy', state: 'playing', except: ['credits'], why: 'On while playing, except during the credits. Dim the lights when it turns on; bring them up when it turns off.' },
     ],
@@ -157,9 +201,61 @@ export const PRESETS = [
 
 export const DEFAULT_PRESET = 'credits';
 
+/** Presets whose sensors work as a set (exactly one on at a time) and are shown grouped. */
+export const GROUPED_PRESETS = ['states'];
+
 export function presetSensors(id, selection) {
   const preset = PRESETS.find((p) => p.id === id);
-  return (preset?.sensors ?? []).map(({ name, type, state, except = [] }) => ({ id: sensorId(), name, type, state, except: [...except], filters: filtersFrom(selection) }));
+  const group = GROUPED_PRESETS.includes(id) ? `${id}:${sensorId().slice(2)}` : undefined;
+  return (preset?.sensors ?? []).map(({ name, type, state, except = [] }) => ({
+    id: sensorId(), name, type, state, except: [...except], filters: filtersFrom(selection), ...(group ? { group } : {}),
+  }));
+}
+
+/** The preset a group belongs to, from its `group` value (`states:ab12cd34`). */
+export const groupPreset = (group) => (group ? group.split(':')[0] : undefined);
+
+/**
+ * Adds a preset to existing sensors.
+ * - `alongside` keeps every sensor; new names that clash get " 2", " 3"...
+ * - `replace` removes the existing sensors, but a preset sensor whose name matches an existing one
+ *   takes over that sensor's identity (and filters and commands), so Home automations using it keep working.
+ */
+export function applyPreset(sensors, id, selection, mode = 'alongside') {
+  const added = presetSensors(id, selection);
+  if (mode === 'replace') {
+    return added.map((sensor) => {
+      const same = sensors.find((s) => s.name.toLowerCase() === sensor.name.toLowerCase());
+      return same ? { ...sensor, id: same.id, filters: same.filters, ...(same.run ? { run: same.run } : {}) } : sensor;
+    });
+  }
+  const names = new Set(sensors.map((s) => s.name.toLowerCase()));
+  return [...sensors, ...added.map((sensor) => {
+    let name = sensor.name;
+    for (let n = 2; names.has(name.toLowerCase()); n += 1) {
+      name = `${sensor.name} ${n}`;
+    }
+    names.add(name.toLowerCase());
+    return { ...sensor, name };
+  })];
+}
+
+/**
+ * Whether an Every State group still works as a set: one of each of its states, set up as the
+ * preset made them, with the same players, people, libraries and media conditions.
+ */
+export function groupIntact(members) {
+  const preset = PRESETS.find((p) => p.id === groupPreset(members[0]?.group));
+  if (!preset || members.length !== preset.sensors.length) {
+    return false;
+  }
+  const key = (s) => `${s.state}:${[...(s.except ?? [])].sort().join('+')}`;
+  const want = preset.sensors.map((s) => `${s.state}:${[...(s.except ?? [])].sort().join('+')}`).sort();
+  const have = members.map((s) => (SENSOR_TYPES[s.type]?.state ? key(s) : 'button')).sort();
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const scope = (s) => [s.filters?.players ?? [], s.filters?.users ?? [], s.filters?.libraries ?? [], s.filters?.mediaTypes ?? [], s.media ?? {}]
+    .map((v) => (Array.isArray(v) ? [...v].sort() : v));
+  return same(want, have) && members.every((m) => same(scope(m), scope(members[0])));
 }
 
 export function libraryRef(server, library) {
@@ -208,7 +304,8 @@ export function summarize(sensor, selection = {}) {
     ...f.mediaTypes.map((t) => MEDIA_TYPES[t] ?? t),
   ], 'anything');
   const who = list(f.users, 'anyone');
-  return `${when}, on ${where}, for ${what}, by ${who}.`;
+  const media = SENSOR_TYPES[sensor.type]?.state ? mediaPhrases(sensor.media) : [];
+  return `${when}, on ${where}, for ${what}${media.length ? ` with ${media.join(', ')}` : ''}, by ${who}.`;
 }
 
 /** True when a sensor can only trigger with Plex Pass. */

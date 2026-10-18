@@ -220,3 +220,35 @@
 .im .im-mono, .im .im-output { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.82rem; }
 .im .im-output { background: var(--im-surface); border: 1px solid var(--im-border); border-radius: 8px; padding: 0.4rem 0.6rem; margin: 0.4rem 0 0; white-space: pre-wrap; color: inherit; max-height: 10rem; overflow: auto; }
 .im .im-run { border-top: 1px dashed var(--im-border); margin-top: 0.75rem; }
+
+/* Restart and unsaved-change banners: noticeable, not alarming. */
+.im .im-banner-info strong { display: block; }
+.im .im-alert-warn { border-color: var(--im-accent-line); }
+
+/* Presets */
+.im .im-btn-preset { border-style: dashed; }
+.im .im-preset-row { display: flex; align-items: center; gap: 0.75rem; padding: 0.55rem 0; border-top: 1px solid var(--im-border); }
+.im .im-preset-row:first-of-type { border-top: 0; }
+.im .im-preset-row small { display: block; color: var(--im-muted); }
+.im .im-preset-row button { margin-left: auto; flex: none; }
+.im .im-preset-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.im .im-group { border: 1px solid var(--im-accent-line); border-radius: var(--im-radius); padding: 0.6rem 0.6rem 0.1rem; margin-bottom: 0.75rem; }
+.im .im-group-head { display: flex; align-items: center; gap: 0.5rem; padding: 0 0.35rem 0.5rem; flex-wrap: wrap; }
+.im .im-group-head small { display: block; color: var(--im-muted); }
+.im .im-group .im-sensor { margin-bottom: 0.5rem; }
+
+/* Guide: Good to know stands out at the top. */
+.im .im-callout { border-left: 4px solid var(--im-accent); background: var(--im-accent-soft); }
+.im .im-callout .im-collapse-body { border-top-color: var(--im-accent-line); padding-top: 0.5rem; }
+
+/* Credits choice in the editor */
+.im .im-credits { grid-template-columns: 1fr; gap: 0.4rem; }
+
+/* Media conditions */
+.im .im-media { border-top: 1px dashed var(--im-border); margin-top: 0.75rem; }
+.im .im-media-head { padding: 0.6rem 0 0.2rem; background: transparent; border: 0; }
+.im .im-nowplaying { border: 1px solid var(--im-border); border-radius: 10px; padding: 0.6rem 0.75rem; margin-top: 0.75rem; background: var(--im-surface); }
+.im .im-np-item { padding-top: 0.5rem; }
+.im .im-np-item + .im-np-item { border-top: 1px solid var(--im-border); margin-top: 0.5rem; }
+.im .im-np { margin-top: 0.35rem; }
+.im .im-np .im-link { padding: 0 0.25rem; }

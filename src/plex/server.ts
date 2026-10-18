@@ -1,5 +1,6 @@
 import type { Marker, PlaybackState, PlayingNotification, SessionInfo } from '../engine/types.js';
 import { markersFromMetadata, sessionFromMetadata, toNumber } from './convert.js';
+import { factsFromMetadata, type MediaFacts } from './media-facts.js';
 import type { PlexMediaContainer, PlexMetadata } from './types.js';
 
 export interface PlexLibrary {
@@ -154,6 +155,28 @@ export class PlexServer {
   async markers(ratingKey: string): Promise<Marker[]> {
     const items = await this.metadata(`/library/metadata/${encodeURIComponent(ratingKey)}?includeMarkers=1`);
     return markersFromMetadata(items);
+  }
+
+  /** Picture, rating and labels of an item, for media conditions. Episodes add their show's labels. */
+  async facts(ratingKey: string): Promise<MediaFacts | undefined> {
+    const [item] = await this.metadata(`/library/metadata/${encodeURIComponent(ratingKey)}`);
+    if (!item) {
+      return undefined;
+    }
+    const showKey = item.type === 'episode' ? item.grandparentRatingKey : undefined;
+    const show = showKey === undefined ? undefined
+      : (await this.metadata(`/library/metadata/${encodeURIComponent(String(showKey))}`).catch(() => []))[0];
+    return factsFromMetadata(item, show);
+  }
+
+  /**
+   * Whether the server has Live TV: a tuner or DVR shows up as a media provider with the
+   * `livetv` protocol (or an EPG provider). Works for shared servers too.
+   */
+  async hasLiveTv(): Promise<boolean> {
+    const body = await this.request<{ MediaContainer?: { MediaProvider?: { identifier?: string; protocols?: string }[] } }>('/media/providers');
+    return (body.MediaContainer?.MediaProvider ?? []).some((provider) =>
+      (provider.protocols ?? '').split(',').includes('livetv') || (provider.identifier ?? '').startsWith('tv.plex.providers.epg'));
   }
 
   /** Websocket URL for server notifications. Plex only accepts the token as a query parameter here. */
