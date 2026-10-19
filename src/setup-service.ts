@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import type { NetworkInterfaceInfo } from 'node:os';
 
 import { DEFAULT_WEBHOOK_PORT } from './config.js';
 import { discover, type Discovery } from './plex/discovery.js';
 import { connectionCandidates, type PlexPin, PlexTv } from './plex/plex-tv.js';
 import { PlexHttpError, PlexServer, type PlexServerPrefs } from './plex/server.js';
+import { bridgePairing, type BridgePairing } from './child-bridge.js';
 import { commandLine, person, player, readDiagnostics, redact, scrubSecrets, unmark } from './diagnostics.js';
 import type { MediaFacts } from './plex/media-facts.js';
 import { configFingerprint } from './runtime.js';
@@ -198,6 +200,14 @@ export class SetupService {
       })));
     }));
     return lists.flat();
+  }
+
+  /** Pairing details of Intermission's own child bridge, by its `_bridge.username`. */
+  bridgePairing(username: string): Promise<BridgePairing> {
+    if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i.test(username)) {
+      throw new SetupError('Not a child bridge ID.');
+    }
+    return bridgePairing(dirname(this.options.storage.directory), username);
   }
 
   acknowledgePlexPass(): Promise<void> {
@@ -517,7 +527,9 @@ export class SetupService {
     for (const sensor of sensors) {
       lines.push(`  ${sensor.name ?? '?'}: ${sensor.type ?? '?'} ${sensor.state ?? (sensor.events ?? []).join(', ')}`);
     }
-    lines.push('', `Settings: ${JSON.stringify({ timing: input.config.timing ?? {}, webhook: { ...(input.config.webhook as object ?? {}) }, detailedLogging: input.config.detailedLogging ?? false })}`);
+    const bridge = (input.config._bridge ?? undefined) as { username?: string; port?: number } | undefined;
+    lines.push('', `Bridge: ${bridge?.username ? `own child bridge (port ${bridge.port ?? 'automatic'})` : 'main Homebridge bridge'}`);
+    lines.push(`Settings: ${JSON.stringify({ timing: input.config.timing ?? {}, webhook: { ...(input.config.webhook as object ?? {}) }, detailedLogging: input.config.detailedLogging ?? false })}`);
     return lines.join('\n');
   }
 }

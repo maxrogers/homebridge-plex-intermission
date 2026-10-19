@@ -1,6 +1,7 @@
 import { networkInterfaces } from 'node:os';
 
 import { HomebridgePluginUiServer, RequestError } from '@homebridge/plugin-ui-utils';
+import qrcode from 'qrcode-generator';
 
 import { CommandRunner } from '../dist/commands.js';
 import { PlexHttpError } from '../dist/plex/server.js';
@@ -15,6 +16,16 @@ class IntermissionUiServer extends HomebridgePluginUiServer {
 
     this.handle('/status', (body) => service.status(typeof body.setupId === 'string' ? body.setupId : undefined));
     this.handle('/about', () => service.about());
+    this.handle('/bridge/pairing', async (body) => {
+      const pairing = await service.bridgePairing(String(body.username ?? ''));
+      if (!pairing.setupURI || pairing.paired) {
+        return pairing;
+      }
+      const qr = qrcode(0, 'M');
+      qr.addData(pairing.setupURI);
+      qr.make();
+      return { ...pairing, qrSvg: qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true }) };
+    });
     this.handle('/runtime', (body) => service.runtime(body.config ?? {}));
     this.handle('/nowplaying', (body) => service.nowPlaying(body.servers ?? []));
     this.handle('/plexpass/ack', () => service.acknowledgePlexPass());

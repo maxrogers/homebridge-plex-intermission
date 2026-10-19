@@ -41,6 +41,7 @@ if (['main', 'edit', 'advanced', 'recipes', 'review', 'ended', 'nopass-adv', 'co
     { id: 's-6', name: 'Wide Movie', type: 'occupancy', state: 'playing', except: [], filters: f(), media: { shape: 'wide' } },
   ];
   config.preset = 'states';
+  if (qs.get('bridge') !== 'main') config._bridge = { username: '0E:12:34:56:78:9A', port: 51234, name: 'Intermission' };
   if (scenario === 'commands' || scenario === 'edit-cmd') config.commands = { enabled: true, list: [{ id: 'c-1', name: 'Projector wide', command: 'curl -s http://projector.local/lens?memory={type}' }, { id: 'c-2', name: 'Log title', command: 'echo {title} >> /homebridge/watched.log' }] };
 }
 if (scenario === 'choose') config.servers = [{ id: 'srv', name: 'Unraid', url: 'http://x' }, { id: 'cab', name: 'Cabin', url: 'http://y' }];
@@ -78,6 +79,9 @@ window.homebridge = {
       case '/diagnostics': return `Intermission diagnostics\nCreated 2026-10-18T23:00:00.000Z. ${body.includeNames ? 'Titles and names are included.' : 'Titles, people, players and command lines are replaced with placeholders.'}\n\n== Setup ==\n${report}\n\n== Recent log ==\n2026-10-18T22:10:01.000Z info  Media Playing: on (${body.includeNames ? 'Dune: Part Two, Living Room' : 'Title 1, Player 1'})`;
       case '/commands/test': return { code: 0, output: 'OK: lens memory 2', timedOut: false };
       case '/about': return { version: '0.1.0', node: 'v24.3.0', repo: 'https://github.com/maxrogers/homebridge-plex-intermission', issues: 'https://github.com/maxrogers/homebridge-plex-intermission/issues', funding: 'https://ko-fi.com/maxrogers' };
+      case '/bridge/pairing': return { none: { published: false, paired: false }, paired: { published: true, paired: true } }[qs.get('pairing')]
+        ?? { published: true, paired: false, pincode: '031-45-154', setupURI: 'X-HM://0023ISYWYABCD',
+          qrSvg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="#fff"/><path d="M1 1h3v3h-3zM6 1h3v3h-3zM1 6h3v3h-3zM5 5h1v1h-1zM7 7h2v2h-2z" fill="#000"/></svg>' };
       case '/runtime': return { none: { running: false, current: false }, stale: { running: true, current: false } }[qs.get('runtime')] ?? { running: true, current: true };
       case '/nowplaying': return [
         { server: 'Unraid', player: 'Living Room', user: 'Steve', title: 'Dune: Part Two', type: 'movie', library: 'Movies', live: false,

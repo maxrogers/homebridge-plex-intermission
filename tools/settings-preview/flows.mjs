@@ -47,6 +47,8 @@ await flow('one server: chosen automatically, Movies and TV preselected, preset 
   await click(page, '[data-action=finish]');
   const c = await config(page);
   assert.deepEqual(c.servers.map((s) => s.id), ['srv']);
+  assert.match(c._bridge.username, /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/, 'own child bridge by default');
+  assert.ok(c._bridge.port >= 51000 && c._bridge.port < 57000 && c._bridge.port !== 51826);
   assert.equal(c.sensors.length, 1);
   assert.deepEqual(libs(c.sensors[0]), ['srv/1', 'srv/2']);
   assert.deepEqual(errors, []);
@@ -317,6 +319,35 @@ await flow('banners: restart needed, unsaved changes; port amber while waiting a
   assert.match(await page.textContent('#im-webhooks'), /Not listening/);
   ({ page } = await open({ s: 'main', runtime: 'none' }));
   assert.match(await page.textContent('.im-banner-info'), /Restart Homebridge to start it/);
+});
+
+await flow('child bridge: can be turned off at setup; pairing card until added; not offered once set up', async () => {
+  let { page } = await open({ s: 'server', servers: 'srv' });
+  await click(page, '[data-action=webhooks-next]');
+  await page.waitForTimeout(300);
+  await click(page, '[data-action=to-template]');
+  assert.ok(await page.$('[data-child-bridge]:checked'), 'on by default');
+  await page.uncheck('[data-child-bridge]');
+  await click(page, '[data-action=finish]');
+  assert.equal((await config(page))._bridge, undefined);
+
+  ({ page } = await open({ s: 'main' }));
+  assert.match(await page.textContent('.im-pairing'), /031-45-154/);
+  assert.ok(await page.$('.im-qr svg'));
+  await click(page, '[data-action=tab][data-id=advanced]');
+  assert.match(await page.textContent('.im-facts'), /Intermission's own bridge/);
+
+  ({ page } = await open({ s: 'main', pairing: 'paired' }));
+  assert.equal(await page.$('.im-pairing'), null, 'gone once paired');
+  ({ page } = await open({ s: 'main', bridge: 'main' }));
+  assert.equal(await page.$('.im-pairing'), null, 'main bridge: no card');
+  await click(page, '[data-action=tab][data-id=advanced]');
+  await click(page, '[data-action=redo-setup]');
+  await page.waitForTimeout(400);
+  await click(page, '[data-action=use-servers]');
+  await click(page, '[data-action=webhooks-next]');
+  await page.waitForTimeout(300);
+  assert.equal(await page.$('[data-child-bridge]'), null, 'not offered when sensors exist');
 });
 
 console.log(results.join('\n'));

@@ -559,6 +559,21 @@ and labels (any of; an episode also uses its show's labels). Every set group mus
 - Picture shape comes from Plex's `aspectRatio`. A letterboxed 2.39:1 film encoded as 16:9 reports 1.78; a Plex label
   such as "Scope" is the reliable option for those files.
 
+## Child bridge
+
+The last setup step offers "Run Intermission on its own bridge", on by default and only at first setup (no sensors
+yet): moving sensors between bridges later re-creates them in Apple Home and breaks automations. Finishing setup
+writes `_bridge` as Homebridge's own "Use Child Bridge" does: a random, locally administered MAC-style `username`, a
+fixed `port` from 51000 to 56999 (never 51826) and `name: "Intermission"`. The pairing code is the main bridge's PIN,
+as with any child bridge.
+
+After the restart, the Sensors tab shows "Add Intermission to the Home app" with the QR code and the code until the
+bridge is paired. Both come from HAP-NodeJS's own record of the bridge (`persist/AccessoryInfo.<id>.json`: pincode,
+setupID, category, paired clients); the setup URI is computed the same way as `Accessory.setupURI()` (checked against
+it in the tests) and drawn with `qrcode-generator` (MIT, no dependencies). "Reset Intermission" keeps `_bridge`, so the
+bridge already in the Home app is reused. Verified in a real Homebridge 2.4: the generated config starts a child
+bridge, the code read from storage pairs a HAP controller, and the sensors appear on that bridge.
+
 ## Restart banner
 
 At start the plugin writes `running.json` with a fingerprint of the config block it loaded (keys sorted; Homebridge's

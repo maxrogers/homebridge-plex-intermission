@@ -3,7 +3,7 @@ import {
   CONDITIONS, DEFAULT_WEBHOOK_PORT, EVENTS, EXCEPTIONS, CAN_EXCEPT, CREDITS_MODES, LIBRARY_KINDS, MEDIA_TYPES, PLATFORM, PRESETS, DEFAULT_PRESET, SENSOR_TYPES, TIMING_FIELDS,
   SHAPES, RESOLUTIONS, DYNAMIC_RANGES, RATINGS,
   applyPreset, availableMediaTypes, defaultSelection, creditsMode, describeFacts, groupIntact, groupPreset, hasMediaConditions, libraryRef, needsPlexPass, presetSensors, sensorId, usesCredits,
-  reconcileSelection, reconcileSensors, newSensor, playerRef, setTiming, summarize, timingValue,
+  reconcileSelection, reconcileSensors, newChildBridge, newSensor, playerRef, setTiming, summarize, timingValue,
 } from './model.js';
 
 const root = document.getElementById('intermission');
@@ -41,7 +41,14 @@ const state = {
   presetPicker: false,
   /** What is playing now, for media conditions; per sensor being edited. */
   nowPlaying: undefined,
+  /** Setup's choice to run on Intermission's own child bridge (on by default). */
+  useChildBridge: true,
+  /** Pairing details of the child bridge, once Homebridge has started it. */
+  pairing: undefined,
 };
+
+/** A child bridge is offered only at first setup: moving existing sensors would re-create them in Apple Home. */
+const offerChildBridge = () => !state.config._bridge && state.config.sensors.length === 0;
 
 const escape = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;' })[c]);
 const pressed = (on) => `aria-pressed="${on ? 'true' : 'false'}"`;
@@ -170,8 +177,46 @@ async function loadMain() {
       // The board still works from the saved choices.
     }
   }
-  await refreshWebhook();
+  await Promise.all([refreshWebhook(), refreshPairing()]);
   render();
+}
+
+/** Reads the child bridge's pairing state, so the page can show its code until it's in the Home app. */
+async function refreshPairing() {
+  const username = state.config._bridge?.username;
+  if (!username) {
+    state.pairing = undefined;
+    return;
+  }
+  try {
+    state.pairing = await request('/bridge/pairing', { username });
+  } catch {
+    state.pairing = undefined;
+  }
+}
+
+/** Shown at the top of Sensors until Intermission's bridge is added to the Home app. */
+function pairingCard() {
+  const p = state.pairing;
+  if (!state.config._bridge || !p || p.paired) {
+    return '';
+  }
+  if (!p.published || !p.setupURI) {
+    return needsRestart() || state.dirty ? '' : `<div class="im-card im-banner mb-3"><strong class="im-banner-title">Add Intermission to the Home app</strong>
+      <span>Intermission runs on its own bridge. Its pairing code appears here once Homebridge has restarted.</span>
+      <div class="mt-2"><button class="btn btn-sm btn-outline-secondary" data-action="recheck-pairing">Check again</button></div></div>`;
+  }
+  return `<div class="im-card im-pairing mb-3">
+      <div class="im-qr" aria-label="HomeKit pairing code">${p.qrSvg ?? ''}</div>
+      <div><strong class="im-banner-title">Add Intermission to the Home app</strong>
+        <ol class="small mb-2 mt-1">
+          <li>In the Home app, tap <strong>+</strong>, then <strong>Add Accessory</strong>.</li>
+          <li>Scan this code with your iPhone or iPad.</li>
+          <li>Or tap <strong>More options</strong>, choose <strong>Intermission</strong>, and enter <strong class="im-pin">${escape(p.pincode)}</strong>.</li>
+        </ol>
+        <p class="im-hint mt-0 mb-2">Intermission runs on its own bridge, so a restart or a problem never touches your other Homebridge accessories. It's added once; your sensors then appear in Apple Home.</p>
+        <button class="btn btn-sm btn-outline-secondary" data-action="recheck-pairing">I've added it</button></div>
+    </div>`;
 }
 
 async function refreshWebhook(rethrow = false) {
@@ -314,6 +359,9 @@ async function finishSetup() {
     state.setupServers = undefined;
   }
   state.config.selection = state.selection;
+  if (offerChildBridge() && state.useChildBridge) {
+    state.config._bridge = newChildBridge();
+  }
   if (state.template !== 'scratch' && state.config.sensors.length === 0) {
     state.config.sensors = presetSensors(state.template, state.selection);
     state.config.preset = state.template;
@@ -499,6 +547,9 @@ function template() {
     <p class="im-muted small">A preset is a starting set of sensors. Each uses sensors, which Apple Home can always read, so a missed update corrects itself. You can edit everything later, or add another preset from the Sensors tab.</p>
     ${cards}
     <p class="small mt-1"><button class="im-link" data-action="pick-template" data-id="scratch">${state.template === 'scratch' ? '✓ ' : ''}Start from scratch instead</button></p>
+    ${offerChildBridge() ? `<label class="im-row im-bridge-choice mt-3"><input type="checkbox" class="form-check-input" data-child-bridge ${state.useChildBridge ? 'checked' : ''}>
+      <span><strong>Run Intermission on its own bridge</strong> <span class="im-badge on">Recommended</span>
+        <small class="d-block im-muted">A restart or a problem in Intermission never touches your other Homebridge accessories, and Intermission can restart on its own. After the restart, you add it to the Home app once with its own code, shown on the Sensors tab. Best decided now: moving it later re-creates its sensors in Apple Home.</small></span></label>` : ''}
     <div class="d-flex gap-2 mt-2">
       <button class="btn btn-im" data-action="finish" ${state.busy ? 'disabled' : ''}>${state.template === 'scratch' ? 'Finish' : 'Create sensors'}</button>
       <button class="btn btn-outline-secondary" data-action="back-choose">Back</button>
@@ -538,7 +589,9 @@ function restartBanner() {
     ? `<div class="im-card im-banner im-banner-info mb-3"><strong class="im-banner-title">Restart Homebridge to apply your saved settings.</strong>
         <span>Intermission keeps using the previous settings until then.</span></div>`
     : `<div class="im-card im-banner im-banner-info mb-3"><strong class="im-banner-title">Intermission is set up.</strong>
-        <span>Restart Homebridge to start it. Your sensors appear in Apple Home after the restart.</span></div>`;
+        <span>Restart Homebridge to start it. ${state.config._bridge
+          ? 'Then add it to the Home app with the code that appears on the Sensors tab.'
+          : 'Your sensors appear in Apple Home after the restart.'}</span></div>`;
 }
 
 function plexPassChangeBanner() {
@@ -608,7 +661,7 @@ function sensorsTab() {
       ${members.map(([s, i]) => sensorCard(s, i, sel)).join('')}
     </div>`);
   });
-  return `${webhookNotice()}
+  return `${pairingCard()}${webhookNotice()}
     ${parts.join('') || '<p class="im-muted">No sensors yet. Add a preset, or a sensor of your own.</p>'}
     <div class="d-flex flex-wrap gap-2 mt-2">
       <button class="btn btn-im" data-action="add" data-type="occupancy">Add sensor</button>
@@ -900,17 +953,27 @@ function webhooks() {
 
 function recipesTab() {
   const step = (html) => `<li>${html}</li>`;
-  const automation = (sensor, when = 'Detects Occupancy') =>
-    step(`In the Home app, tap <strong>+</strong>, <strong>Add Automation</strong>, <strong>A Sensor Detects Something</strong>, then <strong>${sensor}</strong> and <strong>${when}</strong>.`);
-  const fade = (sensor, stopWhen) => `<div class="im-card"><h6>A slow fade instead of a jump</h6>
-      <p class="small im-muted mb-2">Apple Home has no fade time, so a fade is a short shortcut that steps the lights.</p><ol>
-      ${step('In the automation, choose any light, scroll down and tap <strong>Convert To Shortcut</strong>.')}
-      ${step(`Replace the steps with <strong>Repeat 10 times</strong>: <strong>Get the state of ${sensor}</strong>; <strong>If</strong> it is ${stopWhen}, <strong>Stop This Shortcut</strong>; raise brightness by 10%; <strong>Wait 6 seconds</strong>.`)}
-      ${step('That takes about a minute, and stops at once if playback comes back.')}</ol></div>`;
   const preset = state.config.preset;
   const head = (id, number, name) => `<div class="im-preset-head mt-4"><h5 class="m-0">${number}. ${name}${preset === id ? ' <span class="im-badge on">Your setup</span>' : ''}</h5>
     <button class="btn btn-sm btn-outline-secondary ms-auto" data-action="pick-preset" data-id="${id}">Add this preset</button></div>`;
-  const good = `<ul class="small mb-0">
+  /** One automation: the trigger, then either a plain light setting or a shortcut recipe. */
+  const auto = (sensor, when, what, recipe) => `<div class="im-auto">
+      <div class="im-auto-when"><span class="im-badge">${when === 'off' ? 'Stops detecting' : 'Detects occupancy'}</span> <strong>${sensor}</strong></div>
+      <div class="im-auto-what">${what}</div>${recipe ?? ''}</div>`;
+  /** Shortcut steps: [action, detail] pairs, shown like the Shortcuts editor lists them. */
+  const recipe = (name, steps, note) => `<div class="im-shortcut"><div class="im-shortcut-name">${name}</div><ol>
+      ${steps.map(([action, detail]) => `<li><span class="im-sc-action">${action}</span> ${detail}</li>`).join('')}</ol>${note ? `<p class="im-hint mt-1 mb-0">${note}</p>` : ''}</div>`;
+  const set = (level) => ['Control Home', `Set your lights to <strong>${level}</strong>`];
+  const wait = (seconds = 1) => ['Wait', `${seconds} second${seconds === 1 ? '' : 's'}`];
+  const check = (sensor, stopWhen) => ['If', `<strong>${sensor}</strong> ${stopWhen}, <strong>Stop This Shortcut</strong>`];
+  const fadeUp = (sensor, stopWhen) => recipe('Gentle fade up (about 3 seconds)', [set('10%'), wait(), check(sensor, stopWhen), set('18%'), wait(), check(sensor, stopWhen), set('25%')],
+    'The checks stop the fade at once if playback comes back mid-fade, for example a mid-credits scene.');
+  const crawl = recipe('Slow crawl (about 7 seconds)', [set('1%'), wait(), set('2%'), wait(), set('3%'), wait(), set('5%'), wait(),
+    check('Credits Rolling', 'is not detected'), set('15%'), wait(), set('25%')],
+  'Eases eyes up from the dark before the main fade. Add more 1% steps for a longer crawl.');
+  const fullHouse = recipe('Full house (about 1 second)', [set('60%'), wait(), set('100%')]);
+  const pauseGlow = recipe('Pause glow (about 1 second)', [set('15%'), wait(), set('30%')]);
+    const good = `<ul class="small mb-0">
       <li><strong>Why suggest sensors, not buttons?</strong> Home can always read a sensor. If it misses a change (hub restart, Wi-Fi drop, Homebridge restart), it sees the right state when it reconnects. A missed button press is simply gone. Buttons are still available for one-off actions.</li>
       <li>Pauses under 2 seconds, skips and quick pause-play bursts don't change any sensor, so lights never stutter. Adjust it in Settings, Advanced, <strong>Pause debounce</strong>.</li>
       <li>Movies and TV Shows get credits and intro handling. Music, Photos, Other Videos and Live TV just follow play, pause and stop.</li>
@@ -923,31 +986,44 @@ function recipesTab() {
   return `<div class="im-recipe">
     ${collapsible('good-to-know', 'Good to know', 'How Intermission behaves, in a few lines.', good, { defaultOpen: true, extraClass: 'im-callout' })}
 
+    <h4 class="mt-4 mb-1">Making the automations</h4>
+    <p class="im-muted small">Intermission makes the sensors; you make the light changes in the Home app. Each preset below lists the automations to make.</p>
+    <div class="im-card"><h6>A plain automation</h6><ol>
+      ${step('In the Home app, open the <strong>Automation</strong> tab and tap <strong>+</strong>.')}
+      ${step('Choose <strong>A Sensor Detects Something</strong>, then your Intermission sensor, for example <strong>Media Playing</strong>.')}
+      ${step('Choose <strong>Detects Occupancy</strong> or <strong>Stops Detecting Occupancy</strong>, as the preset says, then <strong>Next</strong>.')}
+      ${step('Pick your lights or a scene and set the level. Done.')}</ol></div>
+    <div class="im-card"><h6>A fade, using a shortcut</h6>
+      <p class="small im-muted mb-2">Apple Home sets lights in one jump. For a fade, the automation runs a short shortcut that steps the lights up, waiting a second between steps. Most smart dimmers already glide between levels, so 1-second steps look smooth.</p><ol>
+      ${step('Make the automation as above, up to picking lights: pick any one light.')}
+      ${step('Scroll to the bottom and tap <strong>Convert To Shortcut</strong>.')}
+      ${step('Delete the step that is there, then add the steps from the recipe: <strong>Control Home</strong> sets a light level, <strong>Wait</strong> pauses, and <strong>If</strong> uses <strong>Get the state of</strong> your sensor to stop early.')}
+      ${step('Tap <strong>Done</strong>. Change the levels to suit your room; the shape matters more than the exact numbers.')}</ol></div>
+
     <h4 class="mt-4 mb-1">Presets</h4>
-    <p class="im-muted small">Intermission makes the sensors; you make the light changes in the Home app. Each preset below lists the automations to make for it. "Add this preset" adds its sensors to the Sensors tab.</p>
+    <p class="im-muted small">"Add this preset" adds its sensors to the Sensors tab.</p>
 
     ${head('simple', 1, 'Simple')}
-    <p class="small mt-2">Best for rooms where the lights just go down while anything plays and come back for everything else, including music.</p>
-    <div class="im-card"><h6>Two automations</h6><ol>
-      ${automation('Media Playing')}${step('Choose your lights and set them dim, or pick a scene.')}
-      ${automation('Media Playing', 'Stops Detecting')}${step('Set your normal lighting.')}</ol></div>
+    <p class="small mt-2">Best for rooms where the lights just go down while anything plays and come back for everything else, including music. Two automations:</p>
+    ${auto('Media Playing', 'on', 'Set your lights dim (or a scene), in one jump.')}
+    ${auto('Media Playing', 'off', 'Bring the lights back. A fade feels nicer:', fullHouse)}
 
     ${head('credits', 2, 'Simple + Credits')}
-    <p class="small mt-2">Best for most living rooms and theaters. The same two automations as Simple. The sensor also turns off for the credits, so the lights come up, and by default turns on again for a mid-credits scene.</p>
-    ${fade('Media Playing', 'detected')}
+    <p class="small mt-2">Best for most living rooms and theaters. Still one sensor: it also turns off for the credits, and by default on again for a mid-credits scene. Two automations:</p>
+    ${auto('Media Playing', 'on', 'Set your lights dim, in one jump, so a mid-credits scene goes dark again at once.')}
+    ${auto('Media Playing', 'off', 'Fade up gently. This covers the credits, a pause and the end alike:', fadeUp('Media Playing', 'is detected'))}
 
     ${head('states', 3, 'Every State')}
-    <p class="small mt-2">Best when pause, credits and the end should each look different. Exactly one of the four sensors is on at a time, so each gets one "Detects Occupancy" automation:</p>
-    <div class="im-card"><ol>
-      ${step('<strong>Media Playing</strong>: lights down.')}
-      ${step('<strong>Media Paused</strong>: a little light, for example just the lamp by the door.')}
-      ${step('<strong>Credits Rolling</strong>: a slow fade up (see below). A mid-credits scene switches back to Media Playing on its own.')}
-      ${step('<strong>Nothing Playing</strong>: normal lighting.')}</ol></div>
-    ${fade('Credits Rolling', 'not detected')}
-    <div class="im-card"><h6>Ideas for Every State</h6><ul class="small mb-0">
+    <p class="small mt-2">Best when pause, credits and the end should each look different. Exactly one of the four sensors is on at a time, so each gets one "Detects Occupancy" automation, and none needs "Stops detecting":</p>
+    ${auto('Media Playing', 'on', 'Lights down, in one jump.')}
+    ${auto('Media Paused', 'on', 'A little light, for example just the lamp by the door, or:', pauseGlow)}
+    ${auto('Credits Rolling', 'on', 'A slow fade up. A mid-credits scene switches back to Media Playing on its own.', crawl)}
+    ${auto('Nothing Playing', 'on', 'Normal lighting.', fullHouse)}
+    <div class="im-card mt-3"><h6>Ideas for Every State</h6><ul class="small mb-0">
       <li>Add a condition such as <strong>only after sunset</strong> so daytime watching leaves the lights alone.</li>
       <li>On <strong>Media Paused</strong>, light the path to the kitchen instead of the whole room.</li>
       <li>Use color: a warm scene for the credits, a dim blue for pause.</li>
+      <li>Several light zones: give each its own steps in the same shortcut, for example sconces a step ahead of the overhead lights.</li>
       <li>Go beyond lights: close the shades on Media Playing, open them on Nothing Playing, or switch a fan or soundbar.</li>
       <li>One sensor per room: give each sensor its own player (Edit, Players), for example "Bedroom Playing".</li>
     </ul></div>
@@ -1022,6 +1098,7 @@ function advancedTab() {
         <dt>Players</dt><dd>${escape(sel.allPlayers ? 'All players' : sel.players.map((p) => p.name).join(', ') || 'None')}</dd>
         <dt>People</dt><dd>${escape(sel.allUsers === false ? sel.users.join(', ') : 'All Plex Home users')}</dd>
         <dt>Libraries</dt><dd>${escape(libraryNames)}</dd>
+        <dt>Bridge</dt><dd>${state.config._bridge ? `Intermission's own bridge${state.pairing?.paired ? ', in the Home app' : ''}` : 'Main Homebridge bridge'}</dd>
       </dl>
       <p class="im-hint">These are the starting choices for new sensors. Each sensor can still be changed on its own.</p>
       <div class="d-flex flex-wrap gap-2 mt-2">
@@ -1472,6 +1549,15 @@ const actions = {
       homebridge.toast.info('This browser blocked the download. Use Copy instead.', 'Diagnostics');
     }
   },
+  'recheck-pairing': async () => {
+    await refreshPairing();
+    if (state.pairing?.paired) {
+      homebridge.toast.success('Intermission is in the Home app.', 'Apple Home');
+    } else if (state.pairing?.published) {
+      homebridge.toast.info('Not added yet. Finish adding it in the Home app, then check again.', 'Apple Home');
+    }
+    render();
+  },
   'goto-diagnostics': () => {
     state.tab = 'advanced';
     state.bugHelp = false;
@@ -1487,7 +1573,8 @@ const actions = {
   }),
   'reset-plugin': () => confirmThen('reset-plugin', () => busy('Resetting Intermission…', async () => {
     const result = await request('/reset', webhookBody());
-    state.config = { platform: PLATFORM, name: state.config.name ?? 'Intermission', sensors: [] };
+    // The child bridge stays: it is already in the Home app, and setup adds the new sensors to it.
+    state.config = { platform: PLATFORM, name: state.config.name ?? 'Intermission', sensors: [], ...(state.config._bridge ? { _bridge: state.config._bridge } : {}) };
     await saveConfig({ persist: true });
     state.status = { signedIn: false };
     state.discovery = undefined;
@@ -1554,6 +1641,10 @@ root.addEventListener('change', (event) => {
     const sensor = editingSensor();
     mediaOf(sensor).labels = [...new Set(el.value.split(',').map((l) => l.trim()).filter(Boolean))];
     void mediaChanged();
+    return;
+  } else if (el.hasAttribute('data-child-bridge')) {
+    state.useChildBridge = el.checked;
+    render();
     return;
   } else if (el.hasAttribute('data-include-names')) {
     state.includeNames = el.checked;

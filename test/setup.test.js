@@ -270,3 +270,34 @@ test('the running record tells whether saved settings are in use', async () => {
   assert.equal(a, configFingerprint({ timing: { stopHold: 5 }, sensors: [{ name: 'A', id: 's' }], platform: 'PlexIntermission', _bridge: { port: 1 } }), 'key order and Homebridge keys do not matter');
   assert.notEqual(a, configFingerprint({ platform: 'PlexIntermission', sensors: [{ id: 's', name: 'B' }], timing: { stopHold: 5 } }));
 });
+
+test('child bridge: a valid ID and port, and the pairing code HAP-NodeJS would show', async (t) => {
+  const { newChildBridge } = await import('../homebridge-ui/public/model.js');
+  const { bridgePairing, setupURI } = await import('../dist/child-bridge.js');
+  const { default: hap } = await import('@homebridge/hap-nodejs');
+  for (let i = 0; i < 50; i++) {
+    const bridge = newChildBridge();
+    assert.match(bridge.username, /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/);
+    assert.equal(parseInt(bridge.username.slice(0, 2), 16) & 0x03, 0x02, 'locally administered, unicast');
+    assert.ok(bridge.port >= 51000 && bridge.port < 57000 && bridge.port !== 51826);
+  }
+  const accessory = new hap.Accessory('Test Bridge', hap.uuid.generate('qr'));
+  accessory._accessoryInfo = { pincode: '031-45-154', category: 2 };
+  accessory._setupID = 'AB12';
+  assert.equal(setupURI('031-45-154', 2, 'AB12'), accessory.setupURI());
+
+  const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'im-cb-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  assert.deepEqual(await bridgePairing(dir, '0E:12:34:56:78:9A'), { published: false, paired: false }, 'not started yet');
+  await mkdir(join(dir, 'persist'));
+  const file = join(dir, 'persist', 'AccessoryInfo.0E123456789A.json');
+  await writeFile(file, JSON.stringify({ pincode: '031-45-154', setupID: 'AB12', category: 2, pairedClients: {} }));
+  const waiting = await bridgePairing(dir, '0e:12:34:56:78:9a');
+  assert.equal(waiting.paired, false);
+  assert.equal(waiting.setupURI, accessory.setupURI());
+  await writeFile(file, JSON.stringify({ pincode: '031-45-154', setupID: 'AB12', category: 2, pairedClients: { 'ABC-123': 'key' } }));
+  assert.equal((await bridgePairing(dir, '0E:12:34:56:78:9A')).paired, true);
+});

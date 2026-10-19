@@ -64,8 +64,10 @@ Initial development.
   library item when play starts. The editor's Now playing panel shows what Plex reports, with "+ condition".
 - Restart banner: the settings page says when changes are unsaved or saved but not running yet. The webhook port dot
   is amber while a restart is due and red when nothing is listening.
-- The Guide starts with Good to know, then a Presets section and ideas beyond the presets.
+- The Guide starts with Good to know, then how to make a plain automation and a fade with Convert To Shortcut, then each preset with its exact automations and shortcut recipes (gentle fade, slow crawl, pause glow, full house).
 - Commands show a short safety note; the name field example is "Projector Control".
+- Intermission runs on its own child bridge by default (chosen at the last setup step). After the restart, the
+  Sensors tab shows the Home app pairing code and QR code until the bridge is added.
 - Fixed: renaming a sensor now renames the cached accessory too (`updateDisplayName`).
 - Fixed: "Remove Intermission webhook" did nothing when it was the only webhook on the account; removal is now
   checked, and an error says so if Plex keeps it.

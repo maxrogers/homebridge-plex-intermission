@@ -134,6 +134,21 @@ export const TIMING_FIELDS = [
 
 export const DEFAULT_WEBHOOK_PORT = 32550;
 
+/**
+ * A child bridge for Intermission, as Homebridge's own "Use Child Bridge" makes one: a random,
+ * locally administered MAC-style ID, and a fixed port clear of Homebridge's default (51826).
+ */
+export function newChildBridge(random = (n) => globalThis.crypto.getRandomValues(new Uint8Array(n))) {
+  const bytes = random(8);
+  bytes[0] = (bytes[0] & 0xfc) | 0x02;
+  const username = [...bytes.slice(0, 6)].map((b) => b.toString(16).padStart(2, '0').toUpperCase()).join(':');
+  let port = 51000 + (((bytes[6] << 8) | bytes[7]) % 6000);
+  if (port === 51826) {
+    port += 1;
+  }
+  return { username, port, name: 'Intermission' };
+}
+
 export function sensorId() {
   const bytes = new Uint8Array(4);
   globalThis.crypto.getRandomValues(bytes);

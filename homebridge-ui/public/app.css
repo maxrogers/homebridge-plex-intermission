@@ -252,3 +252,22 @@
 .im .im-np-item + .im-np-item { border-top: 1px solid var(--im-border); margin-top: 0.5rem; }
 .im .im-np { margin-top: 0.35rem; }
 .im .im-np .im-link { padding: 0 0.25rem; }
+
+/* Guide: automations and shortcut recipes */
+.im .im-auto { border: 1px solid var(--im-border); border-radius: 10px; padding: 0.6rem 0.8rem; margin-top: 0.5rem; }
+.im .im-auto-when { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.im .im-auto-what { font-size: 0.9rem; margin-top: 0.25rem; }
+.im .im-shortcut { background: var(--im-surface); border: 1px solid var(--im-border); border-radius: 8px; padding: 0.5rem 0.75rem; margin-top: 0.5rem; }
+.im .im-shortcut-name { font-weight: 600; font-size: 0.85rem; margin-bottom: 0.25rem; }
+.im .im-shortcut ol { margin: 0; padding-left: 1.4rem; font-size: 0.88rem; }
+.im .im-shortcut li { margin-bottom: 0.15rem; }
+.im .im-sc-action { display: inline-block; min-width: 6.5rem; font-weight: 600; color: var(--im-accent); }
+.im[data-theme="light"] .im-sc-action { color: #8a5a00; }
+
+/* Child bridge pairing */
+.im .im-pairing { display: flex; gap: 1rem; align-items: flex-start; border-left: 4px solid var(--im-accent); }
+.im .im-qr { flex: none; width: 132px; height: 132px; background: #fff; border-radius: 8px; padding: 4px; }
+.im .im-qr svg { width: 100%; height: 100%; display: block; }
+.im .im-pin { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.05em; }
+.im .im-bridge-choice { border: 1px solid var(--im-border); border-radius: 10px; padding: 0.6rem 0.8rem; }
+@media (max-width: 520px) { .im .im-pairing { flex-direction: column; } }
