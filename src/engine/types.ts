@@ -88,7 +88,10 @@ export interface EngineSettings {
   rearmDistanceMs: number;
   /** Pauses shorter than this are ignored. */
   pauseDebounceMs: number;
-  /** Time a stop waits for new playback (autoplay) before it counts. */
+  /**
+   * Time a stop near the end of an item waits for new playback (autoplay) before it counts. Stops
+   * elsewhere wait QUICK_STOP_HOLD_MS, or this if it is shorter.
+   */
   stopHoldMs: number;
   /** Items shorter than this are ignored. 0 disables. */
   minItemLengthMs: number;
@@ -101,7 +104,7 @@ export const DEFAULT_ENGINE_SETTINGS: Readonly<EngineSettings> = {
   creditsMode: 'scenes',
   fallbackPercent: null,
   rearmDistanceMs: 60_000,
-  pauseDebounceMs: 2_000,
+  pauseDebounceMs: 1_500,
   stopHoldMs: 10_000,
   minItemLengthMs: 0,
   seekThresholdMs: 5_000,

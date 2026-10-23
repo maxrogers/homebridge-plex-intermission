@@ -126,8 +126,8 @@ export function availableMediaTypes(libraries) {
 export const TIMING_FIELDS = [
   { key: 'creditsOffset', label: 'Credits offset', help: 'Wait this long after the credits marker. Never earlier than the marker.', unit: 's', min: 0, max: 120, default: 0 },
   { key: 'rearmDistance', label: 'Credits re-arm distance', help: 'Rewinds shorter than this never change the credits state, so the rewind Plex does on resume can\'t flick a sensor.', unit: 's', min: 20, max: 600, default: 60 },
-  { key: 'pauseDebounce', label: 'Pause debounce', help: 'Pauses shorter than this are ignored, so skips and quick pause-play bursts don\'t change any sensor.', unit: 's', min: 0, max: 30, default: 2 },
-  { key: 'stopHold', label: 'Stop hold', help: 'After playback stops, sensors keep their state this long in case the next episode autoplays. Raise it if your player\'s autoplay countdown is longer.', unit: 's', min: 0, max: 60, default: 10 },
+  { key: 'pauseDebounce', label: 'Pause debounce', help: 'Pauses shorter than this are ignored, so skips and quick pause-play bursts don\'t change any sensor. Apple TV skips take up to about 1.3 seconds.', unit: 's', min: 0, max: 30, step: 0.5, default: 1.5 },
+  { key: 'stopHold', label: 'Stop hold', help: 'After playback stops near the end of an item, sensors keep their state this long in case the next episode autoplays. A stop anywhere else counts after 1 second. Raise it if your player\'s autoplay countdown is longer.', unit: 's', min: 0, max: 60, default: 10 },
   { key: 'minItemLength', label: 'Minimum item length', help: 'Shorter items, such as trailers, are ignored. 0 turns this off.', unit: 'min', scale: 60, min: 0, max: 60, default: 0 },
   { key: 'safetyResync', label: 'Safety re-sync', help: 'Only while the connection to Plex is down and something plays. 0 turns this off.', unit: 'min', scale: 60, storedIn: 'min', min: 0, max: 30, default: 5 },
 ];
@@ -229,6 +229,30 @@ export function presetSensors(id, selection) {
 
 /** The preset a group belongs to, from its `group` value (`states:ab12cd34`). */
 export const groupPreset = (group) => (group ? group.split(':')[0] : undefined);
+
+/**
+ * Presets the sensors were set up from, in preset order. Every State is recognised by its group;
+ * Simple and Simple + Credits by a lone Playing sensor (without or with the credits exception) that
+ * has no media conditions.
+ */
+export function presetsInUse(sensors) {
+  const used = new Set();
+  for (const s of sensors ?? []) {
+    if (s.group) {
+      if (PRESETS.some((p) => p.id === groupPreset(s.group))) {
+        used.add(groupPreset(s.group));
+      }
+    } else if (SENSOR_TYPES[s.type]?.state && s.state === 'playing' && !hasMediaConditions(s)) {
+      const except = s.except ?? [];
+      if (except.length === 0) {
+        used.add('simple');
+      } else if (except.length === 1 && except[0] === 'credits') {
+        used.add('credits');
+      }
+    }
+  }
+  return PRESETS.map((p) => p.id).filter((id) => used.has(id));
+}
 
 /**
  * Adds a preset to existing sensors.
@@ -339,7 +363,8 @@ export function timingValue(timing, field) {
 
 /** Writes a displayed value back to config `timing`, clamped to the field's range. */
 export function setTiming(timing, field, value) {
-  const number = Math.min(field.max, Math.max(field.min, Math.round(Number(value))));
+  const step = field.step ?? 1;
+  const number = Math.min(field.max, Math.max(field.min, Math.round(Number(value) / step) * step));
   const next = { ...timing };
   if (!Number.isFinite(number) || number === field.default) {
     delete next[field.key];

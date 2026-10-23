@@ -72,13 +72,13 @@ export function session(overrides = {}) {
 }
 
 /** An engine with a fake clock that records every event as [type, time since start, position]. */
-export function createEngine({ settings = {}, markers = [], sessions = {}, start = 1_000_000, hasCredits } = {}) {
+export function createEngine({ settings = {}, markers = [], sessions = {}, start = 1_000_000, hasCredits, resolveSession, log = silentLog } = {}) {
   const clock = new FakeClock(start);
   const events = [];
   const engine = new PlaybackEngine({
     clock,
-    log: silentLog,
-    resolveSession: async (playerId, sessionKey) => sessions[sessionKey] ?? session(),
+    log,
+    resolveSession: resolveSession ?? (async (playerId, sessionKey) => sessions[sessionKey] ?? session()),
     getMarkers: async (ratingKey) => (typeof markers === 'function' ? markers(ratingKey) : markers),
     hasCredits,
   }, { ...DEFAULT_ENGINE_SETTINGS, ...settings });

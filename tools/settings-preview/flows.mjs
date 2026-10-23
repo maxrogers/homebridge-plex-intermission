@@ -257,6 +257,11 @@ await flow('Guide: Add this preset leads to the choice on the Sensors tab', asyn
   const { page } = await open({ s: 'main' });
   await click(page, '[data-action=tab][data-id=recipes]');
   assert.ok(await page.$('.im-callout [aria-expanded=true]'), 'Good to know starts open');
+  const order = await page.$$eval('[data-preset]', (els) => els.map((el) => el.dataset.preset));
+  assert.deepEqual(order, ['states'], 'only the preset in use shows; the others are folded');
+  assert.equal(await page.$('[data-action=pick-preset][data-id=states]'), null, 'no "Add this preset" for one in use');
+  await click(page, '[data-action=toggle-open][data-id=other-presets]');
+  assert.deepEqual(await page.$$eval('[data-preset]', (els) => els.map((el) => el.dataset.preset)), ['states', 'simple', 'credits']);
   await click(page, '[data-action=pick-preset][data-id=simple]');
   assert.ok(await page.$('#im-preset-choice'));
   assert.ok(await page.$('[data-action=tab][data-id=sensors][aria-selected=true]'));

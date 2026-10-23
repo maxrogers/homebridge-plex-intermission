@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { parseConfig } from '../dist/config.js';
 import {
-  availableMediaTypes, defaultSelection, needsPlexPass, PRESETS, presetSensors, newSensor, setTiming, summarize, TIMING_FIELDS, timingValue,
+  availableMediaTypes, defaultSelection, needsPlexPass, PRESETS, presetSensors, presetsInUse, newSensor, setTiming, summarize, TIMING_FIELDS, timingValue,
 } from '../homebridge-ui/public/model.js';
 import { silentLog } from './helpers.js';
 
@@ -84,8 +84,13 @@ test('advanced fields round-trip through the config ranges', () => {
   assert.equal(timingValue(timing, field('minItemLength')), 5);
   timing = setTiming(timing, field('safetyResync'), 0);
   timing = setTiming(timing, field('stopHold'), 999);
-  timing = setTiming(timing, field('pauseDebounce'), 2);
+  timing = setTiming(timing, field('pauseDebounce'), 1.5);
   assert.deepEqual(timing, { minItemLength: 300, safetyResync: 0, stopHold: 60 }, 'defaults are left out, values clamped');
+  assert.equal(setTiming({}, field('pauseDebounce'), 2.2).pauseDebounce, 2, 'half-second steps');
+  assert.equal(setTiming({}, field('pauseDebounce'), 0.7).pauseDebounce, 0.5);
+  assert.equal(setTiming({}, field('pauseDebounce'), 1.3).pauseDebounce, undefined, '1.3 rounds to the default');
+  assert.equal(setTiming({}, field('stopHold'), 12.4).stopHold, 12, 'whole seconds');
+  assert.equal(parseConfig({ timing: { pauseDebounce: 0.5 } }, silentLog).engine.pauseDebounceMs, 500);
   const config = parseConfig({ timing }, silentLog);
   assert.equal(config.engine.minItemLengthMs, 300_000);
   assert.equal(config.engine.stopHoldMs, 60_000);
@@ -185,4 +190,20 @@ test('media conditions read as part of the summary', async () => {
   assert.equal(summarize(sensor), 'On while playing, on any player, for anything with a wide picture, rated G or PG, by anyone.');
   assert.deepEqual(describeFacts({ aspectRatio: 2.39, resolution: '4k', dynamicRange: 'dv', contentRating: 'PG-13', labels: ['Kids'] }),
     { shape: 'Wide 2.39:1', shapeValue: 'wide', resolution: '4K', dynamicRange: 'Dolby Vision', rating: 'PG-13', labels: ['Kids'] });
+});
+
+test('presets in use are recognised from the sensors', () => {
+  const group = 'states:ab12';
+  const states = presetSensors('states', defaultSelection(discovery)).map((sensor) => ({ ...sensor, group }));
+  assert.deepEqual(presetsInUse([]), []);
+  assert.deepEqual(presetsInUse(states), ['states']);
+  assert.deepEqual(presetsInUse(presetSensors('credits', defaultSelection(discovery))), ['credits']);
+  assert.deepEqual(presetsInUse([...presetSensors('simple', defaultSelection(discovery)), ...states]), ['simple', 'states'], 'in preset order');
+  const custom = [
+    { type: 'occupancy', state: 'playing', except: [], media: { shape: 'wide' } },
+    { type: 'occupancy', state: 'paused', except: [] },
+    { type: 'button', state: 'playing', events: ['media.play'] },
+    { type: 'occupancy', state: 'playing', except: ['credits', 'intro'] },
+  ];
+  assert.deepEqual(presetsInUse(custom), [], 'media conditions, other states, buttons and extra exceptions are custom');
 });

@@ -7,6 +7,29 @@ All notable changes to this project are documented here. The format follows
 
 Initial development.
 
+### Changed (after the first real-world test)
+
+- Nothing Playing now turns on 1 second after a stop partway through an item, instead of 10 seconds. The 10-second
+  stop hold now applies only to stops in or past the credits, in the final 10% of the runtime or within a minute of
+  the end, where autoplay can follow. A real evening's log showed autoplay only ever followed stops at the end.
+- Pause debounce is 1.5 seconds instead of 2, and can be set in half-second steps. Apple TV skip bursts in the same
+  log took at most 1.23 seconds.
+- The stop event's position is where playback stopped, not the last position Plex reported.
+- Guide: screenshots of the Home app for a plain automation, each step of a fade (Convert To Shortcut, the Set
+  step, the finished steps) and Every State's sensors and automations. Tap one to enlarge it.
+- Guide: the fade steps match the Home app. Convert To Shortcut works with nothing picked and starts the shortcut
+  with one Set step, so there is nothing to delete. Recipes use the editor's names: Set, Wait, If (sensor
+  Occupancy Detected is Yes or No), Stop this shortcut, End If.
+- Guide: the presets you use come first, marked "In use", without an "Add this preset" button; the others are folded
+  under "Other presets". Preset numbers are gone, since the order now follows your setup.
+
+### Fixed
+
+- A playback that started while Plex's session list didn't include it yet (seen right after a stop) used a placeholder
+  session with no player name, so sensors filtered by player showed Nothing Playing while something played. The
+  lookup is now retried, the webhook's session is used when it arrives first, and a later webhook replaces a
+  placeholder.
+
 ### Added
 
 - Playback engine: play, pause, resume, stop, seek and credits events from Plex notifications and webhooks, with no polling.

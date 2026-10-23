@@ -59,12 +59,36 @@ interface PlayerRecord {
   stopTimer?: TimerHandle;
   /** The item that stopped, while the stop hold runs. */
   stoppedRatingKey?: string;
+  /** Retry of a session lookup that found nothing. */
+  resolveTimer?: TimerHandle;
+  /**
+   * True when Plex's session list had no entry for this player and a placeholder session is in use.
+   * The next webhook for the same item replaces it.
+   */
+  provisional: boolean;
 }
 
 const ACTIVE = new Set<PlaybackState>(['playing', 'buffering']);
 
 /** Allowance for timers firing a millisecond early or late. */
 const TIMER_TOLERANCE_MS = 1;
+
+/**
+ * Hold for a stop away from the end of an item. Autoplay can't follow such a stop, but some players
+ * report stopped and playing again within milliseconds while seeking.
+ */
+export const QUICK_STOP_HOLD_MS = 1_000;
+
+/** A stop within this much of the end, or in the final tenth of the runtime, waits the full stop hold. */
+const END_ZONE_MS = 60_000;
+const END_ZONE_FRACTION = 0.9;
+
+/**
+ * Plex can briefly leave a new session out of /status/sessions. A lookup that finds nothing is retried
+ * this often before a placeholder is used; the webhook for the same play usually arrives first.
+ */
+const SESSION_RETRY_MS = 1_000;
+const SESSION_RETRIES = 2;
 
 /**
  * Turns Plex server notifications and webhooks into playback events per player.
@@ -126,6 +150,8 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
         this.setRaw(player, 'playing');
         if (!player.ready) {
           this.resolve(player, session);
+        } else if (player.provisional && player.ratingKey === session.media.ratingKey) {
+          this.adopt(player, session);
         }
         break;
       }
@@ -188,6 +214,7 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
         inCredits: false,
         intro: [],
         inIntro: false,
+        provisional: false,
       };
       this.players.set(id, player);
     }
@@ -213,6 +240,7 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
     player.session = undefined;
     player.ready = false;
     player.ignored = false;
+    player.provisional = false;
     player.positionKnown = false;
     player.credits = undefined;
     player.jumpedBack = false;
@@ -221,20 +249,61 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
     player.inIntro = false;
   }
 
-  private resolve(player: PlayerRecord, known?: SessionInfo): void {
+  private resolve(player: PlayerRecord, known?: SessionInfo, attempt = 0): void {
     const generation = player.generation;
     if (known) {
       this.complete(player, generation, known);
       return;
     }
     const ratingKey = player.ratingKey ?? '';
+    const placeholder = () => {
+      if (generation === player.generation && !player.ready) {
+        player.provisional = true;
+        this.complete(player, generation, unknownSession(player.id, ratingKey));
+      }
+    };
     this.deps.resolveSession(player.id, player.sessionKey ?? '').then(
-      (session) => this.complete(player, generation, session ?? unknownSession(player.id, ratingKey)),
+      (session) => {
+        if (generation !== player.generation || player.ready) {
+          return;
+        }
+        if (session) {
+          this.complete(player, generation, session);
+        } else if (attempt < SESSION_RETRIES) {
+          this.deps.log.debug('%s: Plex does not list this session yet; checking again in %ds', label(player), SESSION_RETRY_MS / 1000);
+          player.resolveTimer = this.deps.clock.setTimeout(() => {
+            player.resolveTimer = undefined;
+            if (generation === player.generation && !player.ready) {
+              this.resolve(player, undefined, attempt + 1);
+            }
+          }, SESSION_RETRY_MS);
+        } else {
+          placeholder();
+        }
+      },
       (error: unknown) => {
         this.deps.log.warn('Could not read the Plex session for %s: %s', player.id, describe(error));
-        this.complete(player, generation, unknownSession(player.id, ratingKey));
+        placeholder();
       },
     );
+  }
+
+  /** Replaces a placeholder session with the one a webhook brought, so sensors see the real player and item. */
+  private adopt(player: PlayerRecord, session: SessionInfo): void {
+    this.deps.log.debug('%s: player and item now known from the webhook', label({ ...player, session }));
+    this.clearCreditsTimer(player);
+    if (player.introTimer !== undefined) {
+      this.deps.clock.clearTimeout(player.introTimer);
+      player.introTimer = undefined;
+    }
+    player.generation += 1;
+    player.ready = false;
+    player.provisional = false;
+    player.credits = undefined;
+    player.inCredits = false;
+    player.intro = [];
+    player.inIntro = false;
+    this.complete(player, player.generation, session);
   }
 
   private complete(player: PlayerRecord, generation: number, session: SessionInfo): void {
@@ -319,7 +388,7 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
       if (player.pauseTimer !== undefined) {
         this.deps.clock.clearTimeout(player.pauseTimer);
         player.pauseTimer = undefined;
-        this.deps.log.debug('%s: pause shorter than the pause debounce (%ds), ignored', label(player), Math.round(this.settings.pauseDebounceMs / 1000));
+        this.deps.log.debug('%s: pause shorter than the pause debounce (%ss), ignored', label(player), this.settings.pauseDebounceMs / 1000);
       }
       if (player.activity === 'paused') {
         player.activity = 'playing';
@@ -350,6 +419,12 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
   }
 
   private stop(player: PlayerRecord): void {
+    const position = this.position(player);
+    if (player.raw === 'playing') {
+      // Freeze the position where playback stopped, so the stop event and a resume compare against it.
+      player.positionMs = position;
+      player.observedAt = this.deps.clock.now();
+    }
     player.raw = 'stopped';
     this.clearCreditsTimer(player);
     for (const key of ['pauseTimer', 'introTimer'] as const) {
@@ -366,11 +441,39 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
       return;
     }
     player.stoppedRatingKey = player.ratingKey;
-    this.deps.log.debug('%s: stopped; waiting %ds (stop hold) in case the next item autoplays', label(player), Math.round(this.settings.stopHoldMs / 1000));
+    const nearEnd = this.nearEnd(player, position);
+    const hold = nearEnd ? this.settings.stopHoldMs : Math.min(QUICK_STOP_HOLD_MS, this.settings.stopHoldMs);
+    if (nearEnd) {
+      this.deps.log.debug('%s: stopped near the end; waiting %ds (stop hold) in case the next item autoplays', label(player), Math.round(hold / 1000));
+    } else {
+      this.deps.log.debug('%s: stopped at %s, away from the end; waiting %ss in case playback resumes', label(player), formatTime(position), hold / 1000);
+    }
     player.stopTimer = this.deps.clock.setTimeout(() => {
       player.stopTimer = undefined;
       this.finish(player);
-    }, this.settings.stopHoldMs);
+    }, hold);
+  }
+
+  /**
+   * Whether a stop could be followed by autoplay: in or past the credits, in the final tenth of the
+   * runtime, or within a minute of the end. An unknown position or runtime counts as near the end (cinema
+   * trailers hand off to the movie), except for Live TV.
+   */
+  private nearEnd(player: PlayerRecord, position: number): boolean {
+    if (!player.positionKnown || player.inCredits) {
+      return true;
+    }
+    const first = player.credits?.[0];
+    if (first && position >= first.startMs) {
+      return true;
+    }
+    const media = player.session?.media;
+    const duration = media?.durationMs;
+    if (duration === undefined || duration <= 0) {
+      // Live TV never autoplays; anything else without a known runtime is treated as possibly at its end.
+      return !media?.live;
+    }
+    return position >= duration * END_ZONE_FRACTION || duration - position <= END_ZONE_MS;
   }
 
   private finish(player: PlayerRecord): void {
@@ -500,7 +603,7 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
 
   private clearTimers(player: PlayerRecord): void {
     this.clearCreditsTimer(player);
-    for (const key of ['pauseTimer', 'stopTimer', 'introTimer'] as const) {
+    for (const key of ['pauseTimer', 'stopTimer', 'introTimer', 'resolveTimer'] as const) {
       if (player[key] !== undefined) {
         this.deps.clock.clearTimeout(player[key]);
         player[key] = undefined;

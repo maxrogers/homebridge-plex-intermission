@@ -1,6 +1,7 @@
 # Intermission for Plex: design
 
-How the plugin is designed to work. Pre-release: most of this is not implemented yet.
+How the plugin is designed to work. Pre-release (0.1.0, not yet on npm): built as described here unless Build status
+says otherwise.
 
 ## Goals
 
@@ -49,6 +50,14 @@ Findings that shape the design:
   completion behaviour (`LibraryVideoPlayedAtBehaviour = 3`). In testing it arrived at 90.1%. It is used as a free
   re-sync trigger near the end.
 - **Rapid pause and resume** pairs arrived as little as 67 ms apart, so pause and stop are debounced.
+- **Apple TV skips** (10 s forward or back) report paused, then playing at the new position. In a real evening's log
+  (Oct 2026, about 50 skips) the gap was under 0.4 s for most and at most 1.23 s; deliberate pauses lasted 2.3 s or
+  more. This sets the pause debounce (1.5 s).
+- **Autoplay** (next episode, the next trailer, cinema trailers into the movie) stops the item at or near its end and
+  starts the next 0.6 to 7 s later. In that log, new playback after a stop partway through an item was always the user
+  starting something. An iPhone seeking reported stopped and then playing again 2 to 7 ms apart.
+- **A new session can be missing from `/status/sessions`** for a moment after its first notification (twice in that
+  log, both right after a stop). The webhook for the same play arrived 3 ms and 76 ms after the notification, with the full session.
 - Position extrapolation is accurate: between Apple TV reports, position advanced 10.005 s per 10.002 s of wall time.
 
 ## Events
@@ -79,7 +88,7 @@ Any event type not in this table is logged at debug level and shown in the Live 
 | `credits.start` | Position reaches the credits marker (first or final, per setting) plus offset |
 | `intro.start`, `intro.end` | Position enters or leaves an intro marker (episodes) |
 | `playback.buffering` | Session state is buffering |
-| `session.ended` | Stop was not followed by new playback within the stop hold |
+| `session.ended` | Stop was not followed by new playback within the stop hold (1 s partway through an item) |
 | `session.seek` | A position jump larger than expected was detected |
 
 ## Playback engine
@@ -91,8 +100,29 @@ idle -> playing <-> paused
           |  ^
           v  |        (buffering is treated as playing)
        in credits
-any -> stopping --(stop hold elapsed)--> idle   (new playback during the hold cancels it)
+any -> stopping --(hold elapsed)--> idle   (new playback during the hold cancels it)
 ```
+
+### Stop hold
+
+The hold depends on where playback stopped, because only a stop at the end can be followed by autoplay:
+
+- **Near the end** (in or past the first credits, in the final 10% of the runtime, or within 60 s of the end): the
+  full stop hold, 10 s by default, so the next episode or the movie after a cinema trailer never passes through
+  Nothing Playing. An unknown position or runtime counts as near the end, except for Live TV.
+- **Anywhere else:** 1 s (or the stop hold, if that is shorter). Enough for players that report stopped and playing
+  again within milliseconds, short enough that leaving a movie brings the lights up promptly.
+
+The position used is the estimate at the moment of the stop, which is also frozen as the stop event's position.
+
+### Session lookup
+
+A notification carries no player name or item details, so the first one for a new item triggers a read of
+`/status/sessions`. If Plex doesn't list the session yet, the read is retried twice, 1 s apart. The webhook for the
+same play usually arrives within 100 ms and supplies the session, which ends the wait. Only after the retries does the
+engine use a placeholder (player ID, no title), and the next webhook for that item replaces it and sends `play` again
+so sensors re-check their filters. Before this, a placeholder made sensors filtered by player treat a real playback
+as Nothing Playing until the item stopped.
 
 ### Credits timing
 
@@ -219,8 +249,8 @@ The Advanced page has **Reset to defaults** and the note "These rarely need chan
 | Pre-fire verify lead (only when the notification stream is down) | 20 s | 12 to 120 s |
 | Safety re-sync while playing (only when the notification stream is down) | 5 min | Off, 1 to 30 min |
 | Credits re-arm distance | 60 s | 20 to 600 s |
-| Pause debounce | 2 s | 0 to 30 s |
-| Stop hold | 10 s | 0 to 60 s |
+| Pause debounce | 1.5 s | 0 to 30 s, in 0.5 s steps |
+| Stop hold (near the end of an item) | 10 s | 0 to 60 s; stops elsewhere count after 1 s |
 | Minimum item length | 0 min | 0 to 60 min |
 | Restore state on start | On | On or off |
 | Refresh from Plex | Every 24 h | 6 to 168 h |
@@ -423,7 +453,8 @@ commands run or failed, Plex Pass changes, and errors with what to do about them
   media type or Live TV) and intro ranges;
 - for each state sensor when an item starts, whether it follows this playback or why not (player, person, library,
   media type or a media condition), repeated for media conditions once the item's details are read;
-- pauses ignored by the pause debounce, the stop hold starting, and "the next item started within the stop hold";
+- pauses ignored by the pause debounce, the stop hold starting (near the end, or partway through and the 1 s hold),
+  "the next item started within the stop hold", and session lookups retried because Plex didn't list the session yet;
 - the startup decision (sensors keep their pre-restart state until Plex is read, or 20 s pass);
 - webhooks received, media details read, and command lines.
 
@@ -464,7 +495,7 @@ Both are MIT licensed.
 ## Open questions
 
 - Does a POST to `plex.tv/api/v2/user/webhooks` replace the whole list?
-- Is "Stop This Shortcut" available in Home automations that run on a home hub?
+- "Stop this shortcut" is offered in the Home app's shortcut editor (seen Oct 2026). Still to confirm: does it end the run early when a home hub runs the automation?
 - Which endpoints list Plex Home and shared users?
 - Does the server's `/accounts` name always match the user title in sessions and webhooks? User filters compare names.
 
@@ -476,7 +507,11 @@ Both are MIT licensed.
 | Sensors, controller, platform wiring | Done |
 | Sign-in, several servers, discovery, wizard, board, Recipes, Advanced | Done (tap to edit, drag to reorder) |
 | Webhook "Add for me" with review, "About this setup" report | Done |
-| Plex Pass change banners, Live tab, debug log export, Intermission switch | Next |
+| Plex Pass change notices, Diagnostics export, Now playing panel in the sensor editor (instead of a Live tab) | Done |
+| Guide: presets in use shown first, the others folded | Done |
+| Guide screenshots of the Home app (automation, Convert To Shortcut, shortcut steps, Every State) | Done (`homebridge-ui/public/guide`, WebP, about 130 KB) |
+| Intermission switch (turns all triggers off for a while) | Not built |
+| npm release (`private: true` removed) and Homebridge verification | Not started |
 
 ## Sensor conditions
 
