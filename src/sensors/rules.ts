@@ -23,10 +23,7 @@ export function matchesFilters(filters: SensorFilters, context: MatchContext): b
   const section = context.media?.librarySectionId;
   const library = filters.libraries.length === 0 || (section !== undefined
     && (filters.libraries.includes(section) || (context.serverId !== undefined && filters.libraries.includes(`${context.serverId}/${section}`))));
-  return allows(filters.players, context.playerId)
-    && allows(filters.users, context.user)
-    && library
-    && allows(filters.mediaTypes, context.media?.type);
+  return allows(filters.players, context.playerId) && allows(filters.users, context.user) && library;
 }
 
 export function stateHolds(condition: StateCondition, snapshot: PlayerSnapshot, except: readonly Exception[] = []): boolean {
@@ -102,11 +99,8 @@ export function filterMismatch(filters: SensorFilters, context: MatchContext, na
   if (filters.users.length > 0 && (context.user === undefined || !filters.users.includes(context.user))) {
     return `${context.user === undefined ? 'the person is unknown' : `${person(context.user)} is not chosen`}`;
   }
-  if (!matchesFilters({ ...filters, players: [], users: [], mediaTypes: [] }, context)) {
+  if (!matchesFilters({ ...filters, players: [], users: [] }, context)) {
     return `library ${names.library ?? context.media?.librarySectionId ?? 'unknown'} is not chosen`;
-  }
-  if (!matchesFilters({ players: [], users: [], libraries: [], mediaTypes: filters.mediaTypes }, context)) {
-    return `media type ${context.media?.type ?? 'unknown'} is not chosen`;
   }
   return undefined;
 }

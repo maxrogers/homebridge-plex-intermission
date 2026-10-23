@@ -37,8 +37,10 @@ test('config clamps timing to the documented ranges', () => {
   assert.equal(config.engine.minItemLengthMs, 90_000);
   assert.equal(config.safetyResyncMs, 0);
   assert.equal(parseConfig({ timing: { fallbackPercent: null } }, silentLog).engine.fallbackPercent, null, 'null turns it off');
-  const legacy = parseConfig({ server: { id: 'a', name: 'Old', url: 'http://a' } }, silentLog);
-  assert.deepEqual(legacy.servers, [{ id: 'a', name: 'Old', url: 'http://a' }], 'single-server configs still load');
+  assert.equal(parseConfig({}, silentLog).safetyResyncMs, 300_000, 'safety re-sync defaults to 5 minutes');
+  assert.equal(parseConfig({ timing: { safetyResync: 10 } }, silentLog).safetyResyncMs, 600_000);
+  assert.equal(parseConfig({ timing: { safetyResync: 99 } }, silentLog).safetyResyncMs, 1_800_000);
+  assert.deepEqual(parseConfig({ server: { id: 'a', url: 'http://a' } }, silentLog).servers, [], 'only a servers list is read');
   const many = parseConfig({ servers: [{ id: 'a', url: 'http://a' }, { id: 'a', url: 'http://b' }, { id: 'b', url: 'http://c' }, { url: 'x' }] }, silentLog);
   assert.deepEqual(many.servers.map((s) => s.id), ['a', 'b']);
 });

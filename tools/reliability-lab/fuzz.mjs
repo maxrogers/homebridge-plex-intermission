@@ -33,8 +33,8 @@ await writeFile(join(storage, 'config.json'), JSON.stringify({
     servers: [{ id: 'mock-server', name: 'Mock', url: `http://127.0.0.1:${PLEX_PORT}` }],
     webhook: { enabled: true, port: WEBHOOK_PORT },
     sensors: [
-      { id: 's-play', name: 'Media Playing', type: 'occupancy', state: 'playing', filters },
-      { id: 's-pause', name: 'Media Paused', type: 'occupancy', state: 'paused', filters },
+      { id: 's-play', name: 'Media Playing', type: 'occupancy', state: 'playing', except: ['credits'], filters },
+      { id: 's-pause', name: 'Media Paused', type: 'occupancy', state: 'paused', except: ['credits'], filters },
       { id: 's-credits', name: 'Credits Rolling', type: 'occupancy', state: 'credits', filters },
       { id: 's-idle', name: 'Nothing Playing', type: 'occupancy', state: 'idle', filters },
       { id: 'b-start', name: 'Started Button', type: 'button', events: ['play', 'resume'], filters },

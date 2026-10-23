@@ -6,7 +6,7 @@ import * as hap from '@homebridge/hap-nodejs';
 import { matchesFilters, stateHolds } from '../dist/sensors/rules.js';
 import { SensorAccessory } from '../dist/sensors/sensor-accessory.js';
 
-const none = { players: [], users: [], libraries: [], mediaTypes: [] };
+const none = { players: [], users: [], libraries: [] };
 const media = { ratingKey: '1', title: 'Movie', type: 'movie', librarySectionId: '1' };
 
 test('empty filters allow everything; set filters need a matching value', () => {
@@ -14,8 +14,8 @@ test('empty filters allow everything; set filters need a matching value', () => 
   assert.equal(matchesFilters({ ...none, players: ['A'] }, { playerId: 'A', media }), true);
   assert.equal(matchesFilters({ ...none, players: ['A'] }, { playerId: 'B', media }), false);
   assert.equal(matchesFilters({ ...none, players: ['A'] }, { media }), false, 'no player fails a player filter');
-  assert.equal(matchesFilters({ ...none, libraries: ['1'], mediaTypes: ['movie'] }, { media }), true);
-  assert.equal(matchesFilters({ ...none, mediaTypes: ['episode'] }, { media }), false);
+  assert.equal(matchesFilters({ ...none, libraries: ['1'] }, { media }), true);
+  assert.equal(matchesFilters({ ...none, libraries: ['2'] }, { media }), false);
   assert.equal(matchesFilters({ ...none, libraries: ['srv-a/1'] }, { serverId: 'srv-a', media }), true, 'server-qualified library');
   assert.equal(matchesFilters({ ...none, libraries: ['srv-b/1'] }, { serverId: 'srv-a', media }), false, 'same section on another server');
 });
@@ -61,17 +61,17 @@ test('media conditions match the item\'s details', async () => {
   assert.deepEqual(button.media, {}, 'buttons have no media conditions');
 });
 
-test('older configs keep their meaning', async () => {
+test('exceptions are kept only for conditions that can leave something out', async () => {
   const { parseConfig } = await import('../dist/config.js');
   const log = { debug() {}, info() {}, warn() {}, error() {} };
   const sensors = parseConfig({ sensors: [
-    { id: 'a', name: 'a', type: 'occupancy', state: 'playing-any' },
-    { id: 'b', name: 'b', type: 'occupancy', state: 'playing' },
-    { id: 'c', name: 'c', type: 'occupancy', state: 'paused' },
-    { id: 'd', name: 'd', type: 'occupancy', state: 'playing', except: [] },
-    { id: 'e', name: 'e', type: 'occupancy', state: 'credits', except: ['credits'] },
+    { id: 'a', name: 'a', type: 'occupancy', state: 'playing' },
+    { id: 'b', name: 'b', type: 'occupancy', state: 'playing', except: ['credits', 'credits', 'nap'] },
+    { id: 'c', name: 'c', type: 'occupancy', state: 'active', except: ['intro'] },
+    { id: 'd', name: 'd', type: 'occupancy', state: 'credits', except: ['credits'] },
+    { id: 'e', name: 'e', type: 'occupancy', state: 'sleeping' },
   ] }, log).sensors;
-  assert.deepEqual(sensors.map((s) => `${s.state}:${s.except.join('+')}`), ['playing:', 'playing:credits', 'paused:credits', 'playing:', 'credits:']);
+  assert.deepEqual(sensors.map((s) => `${s.state}:${s.except.join('+')}`), ['playing:', 'playing:credits', 'active:intro', 'credits:', 'playing:']);
 });
 
 function accessory(config, existing) {
@@ -119,3 +119,37 @@ test('a sensor starts in the state it had before Homebridge restarted', () => {
   const again = accessory({ id: 'f', name: 'Playing', type: 'occupancy' }, first.accessory);
   assert.equal(again.accessory.getService(hap.Service.OccupancySensor).getCharacteristic(hap.Characteristic.OccupancyDetected).value, 1);
 });
+
+test('names are cleaned so the Home app accepts them', async () => {
+  const { homeKitName } = await import('../dist/config.js');
+  const { homeKitName: uiName } = await import('../homebridge-ui/public/model.js');
+  const cases = [
+    ['Media Playing', 'Media Playing'],
+    ["Kids' Room: Playing", "Kids' Room: Playing"],
+    ['🎬 Movie Night!', 'Movie Night'],
+    ['Living Room’', 'Living Room'],
+    ['  Lots   of  space ', 'Lots of space'],
+    ['A', 'A Sensor'],
+    ['***', 'Sensor'],
+    ['Ünïcödé Licht', 'Ünïcödé Licht'],
+  ];
+  for (const [input, expected] of cases) {
+    assert.equal(homeKitName(input), expected, input);
+    assert.equal(uiName(input), expected, `settings page: ${input}`);
+  }
+  assert.equal(homeKitName('!', 'Button'), 'Button');
+});
+
+test('a guarded clock reports a failing timer instead of throwing', async () => {
+  const { guardedClock, systemClock } = await import('../dist/engine/clock.js');
+  const errors = [];
+  const clock = guardedClock(systemClock, (error) => errors.push(error.message));
+  await new Promise((resolve) => {
+    clock.setTimeout(() => {
+      setImmediate(resolve);
+      throw new Error('timer failed');
+    }, 1);
+  });
+  assert.deepEqual(errors, ['timer failed']);
+});
+

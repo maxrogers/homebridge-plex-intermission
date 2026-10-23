@@ -8,7 +8,8 @@ import { webhookFromPayload } from './plex/convert.js';
 import type { PlexWebhookPayload } from './plex/types.js';
 import { PlexHttpError } from './plex/server.js';
 import type { MediaFacts } from './plex/media-facts.js';
-import { player as markPlayer, title as markTitle } from './diagnostics.js';
+import { person as markPerson, player as markPlayer, title as markTitle } from './diagnostics.js';
+import { describe } from './errors.js';
 import { contextOf, filterMismatch, matchesFilters, mediaMatches, mediaMismatch, stateHolds, type MatchContext } from './sensors/rules.js';
 
 /** The parts of PlexServer the controller uses. */
@@ -31,13 +32,13 @@ export interface StreamApi extends EventEmitter<{
 /** Webhook payloads. The platform owns the receiver, shared by every server's controller. */
 export type WebhookApi = EventEmitter<{ payload: [unknown] }>;
 
-/** A HomeKit output. */
 /** What was playing when a sensor changed, for commands. */
 export interface ChangeContext {
   event?: string;
   session?: SessionInfo;
 }
 
+/** A HomeKit sensor or button, as one server's controller sees it. */
 export interface SensorOutput {
   readonly config: SensorConfig;
   setActive(active: boolean, context?: ChangeContext): void;
@@ -117,7 +118,7 @@ export class Controller {
     options.webhooks?.on('payload', (payload) => this.onWebhook(payload));
   }
 
-  async start(): Promise<void> {
+  start(): void {
     this.stopped = false;
     this.ready = false;
     this.readyTimer = this.options.clock.setTimeout(() => this.becomeReady(true), STARTUP_GRACE_MS);
@@ -140,7 +141,7 @@ export class Controller {
     }
   }
 
-  async stop(): Promise<void> {
+  stop(): void {
     this.stopped = true;
     if (this.readyTimer) {
       this.options.clock.clearTimeout(this.readyTimer);
@@ -221,7 +222,10 @@ export class Controller {
       this.options.log.debug('Ignoring %s from another server.', webhook.event);
       return;
     }
-    this.options.log.debug('Webhook %s', webhook.event);
+    const session = webhook.session;
+    this.options.log.debug('Webhook %s%s', webhook.event, session
+      ? ` from ${markPlayer(session.playerTitle ?? session.playerId)} (${webhook.user ? markPerson(webhook.user) : 'unknown person'}), ${markTitle(session.media.title)}`
+      : webhook.media ? `: ${markTitle(webhook.media.title)}` : '');
     this.engine.handleWebhook(webhook);
     if (WEBHOOK_ONLY.has(webhook.event)) {
       this.pressButtons(webhook.event as TriggerEvent, this.webhookContext(webhook), webhook.session);
@@ -359,6 +363,6 @@ export class Controller {
       }
       return;
     }
-    this.options.log.warn('%s: %s', context, error instanceof Error ? error.message : String(error));
+    this.options.log.warn('%s: %s', context, describe(error));
   }
 }

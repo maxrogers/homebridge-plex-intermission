@@ -5,7 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { lanAddress, serverAddress, SetupService } from '../dist/setup-service.js';
+import { unmark } from '../dist/diagnostics.js';
+import { lanAddress, serverAddress } from '../dist/network.js';
+import { diagnosticsReport, setupReport } from '../dist/report.js';
+import { SetupService } from '../dist/setup-service.js';
 import { Storage } from '../dist/storage.js';
 
 const nic = (address, netmask = '255.255.255.0', internal = false) => ({ address, netmask, family: 'IPv4', internal, mac: '', cidr: null });
@@ -93,13 +96,13 @@ test('adds the webhook, keeps the others, replaces an old address and turns the 
   assert.equal(before.stale.length, 1);
   assert.deepEqual(before.disabledOn, ['Unraid']);
 
-  const after = await service.addWebhook({ servers });
+  const after = await service.updateWebhooks({ servers }, { add: true });
   assert.equal(after.registered, true);
   assert.deepEqual(state.webhooks, ['https://other.example/hook', `http://10.0.0.5:32550/${secret}`]);
   assert.equal(state.webhooksEnabled, true);
   assert.deepEqual(after.disabledOn, []);
 
-  await service.addWebhook({ servers });
+  await service.updateWebhooks({ servers }, { add: true });
   assert.equal(state.posts, 1, 'nothing to change the second time');
 
   const removed = await service.removeWebhook({ servers });
@@ -110,7 +113,7 @@ test('adds the webhook, keeps the others, replaces an old address and turns the 
 test('removing the webhook when it is the only one on the account clears the list', async (t) => {
   const { service, servers, state } = await fakePlex(t);
   state.webhooks = [];
-  await service.addWebhook({ servers });
+  await service.updateWebhooks({ servers }, { add: true });
   assert.equal(state.webhooks.length, 1);
   const removed = await service.removeWebhook({ servers });
   assert.equal(removed.registered, false);
@@ -121,18 +124,21 @@ test('without Plex Pass the webhook is not offered', async (t) => {
   const { service, servers } = await fakePlex(t, { plexPass: false });
   const status = await service.webhookStatus({ servers });
   assert.equal(status.plexPass, false);
-  await assert.rejects(service.addWebhook({ servers }), /Plex Pass/);
+  await assert.rejects(service.updateWebhooks({ servers }, { add: true }), /Plex Pass/);
 });
 
 test('the report summarises without secrets', async (t) => {
   const { service, servers, secret } = await fakePlex(t, { webhooksEnabled: true });
-  const report = await service.report({
+  const report = unmark(await setupReport(service, {
     config: { setupId: 'setup-1', sensors: [{ name: 'Media Playing', type: 'occupancy', state: 'playing' }], timing: { stopHold: 20 } },
     servers,
     homebridgeVersion: '2.4.0',
+    timeZone: 'America/Denver (UTC-06:00)',
     nodeVersion: 'v24.0.0',
-  });
+  }));
   assert.match(report, /Plex Pass: yes/);
+  assert.match(report, /Time zone: America\/Denver \(UTC-06:00\) \(log times are UTC\)/);
+  assert.match(report, /Running: not started since setup/);
   assert.match(report, /Version: 1\.41\.0/);
   assert.match(report, /Credits detection: as a scheduled task and when media is added/);
   assert.match(report, /Library 1: Movies \(movie/);
@@ -191,7 +197,7 @@ test('a Plex Pass change is noticed once and kept until acknowledged', async (t)
 
 test('reset removes the webhook, the sign-in and the Plex Pass history', async (t) => {
   const { service, storage, state, servers, secret } = await fakePlex(t, { webhooks: ['https://other.example/hook'] });
-  await service.addWebhook({ servers });
+  await service.updateWebhooks({ servers }, { add: true });
   assert.ok(state.webhooks.some((url) => url.endsWith(secret)));
   const result = await service.resetPlugin({ servers });
   assert.equal(result.webhookRemoved, true);
@@ -218,7 +224,7 @@ test('diagnostics: setup, sensors and the kept log, without secrets, with names 
     sensors: [{ id: 's', name: 'Media Playing', type: 'occupancy', state: 'playing', except: ['credits'], filters: { players: ['ATV'], users: ['Jen'], libraries: ['srv/1'] }, run: { on: ['c'] } }],
     commands: { enabled: true, list: [{ id: 'c', name: 'Projector Control', command: 'curl http://10.0.0.9/?key=topsecretkey' }] },
   };
-  const text = await service.diagnostics({ config, servers });
+  const text = await diagnosticsReport(service, { config, servers }, new Date());
   assert.match(text, /== Sensors ==/);
   assert.match(text, /players: Player 1/);
   assert.match(text, /people: Person \d/);
@@ -232,7 +238,7 @@ test('diagnostics: setup, sensors and the kept log, without secrets, with names 
   assert.match(text, /x\.x\.x\.x:32400/, 'public addresses are hidden');
   assert.doesNotMatch(text, /⁣/, 'no markers left');
 
-  const named = await service.diagnostics({ config, servers, includeNames: true });
+  const named = await diagnosticsReport(service, { config, servers, includeNames: true }, new Date());
   assert.match(named, /Dune: Part Two/);
   assert.ok(!named.includes(secret));
 });

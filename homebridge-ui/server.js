@@ -1,3 +1,4 @@
+// Requests from the settings page. Runs in the Homebridge UI's plugin server, not in Homebridge itself.
 import { networkInterfaces } from 'node:os';
 
 import { HomebridgePluginUiServer, RequestError } from '@homebridge/plugin-ui-utils';
@@ -5,17 +6,25 @@ import qrcode from 'qrcode-generator';
 
 import { CommandRunner } from '../dist/commands.js';
 import { PlexHttpError } from '../dist/plex/server.js';
+import { diagnosticsReport } from '../dist/report.js';
 import { SetupError, SetupService, webhookOptionsFrom } from '../dist/setup-service.js';
 import { Storage } from '../dist/storage.js';
+
+/** Sample values for testing a command from Settings. */
+const SAMPLE_CONTEXT = { sensor: 'Media Playing', state: 'on', title: 'Test Movie', type: 'movie', library: 'Movies', player: 'Living Room', user: 'Test User' };
+const QUIET = { debug() {}, info() {}, warn() {}, error() {} };
 
 class IntermissionUiServer extends HomebridgePluginUiServer {
   constructor() {
     super();
     const service = new SetupService({ storage: new Storage(this.homebridgeStoragePath), networkInterfaces });
     const webhook = (body) => ({ ...webhookOptionsFrom(body.config ?? {}), servers: body.servers ?? [] });
+    const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string') : []);
 
     this.handle('/status', (body) => service.status(typeof body.setupId === 'string' ? body.setupId : undefined));
     this.handle('/about', () => service.about());
+    this.handle('/runtime', (body) => service.runtime(body.config ?? {}));
+    this.handle('/plexpass/ack', () => service.acknowledgePlexPass());
     this.handle('/bridge/pairing', async (body) => {
       const pairing = await service.bridgePairing(String(body.username ?? ''));
       if (!pairing.setupURI || pairing.paired) {
@@ -26,46 +35,37 @@ class IntermissionUiServer extends HomebridgePluginUiServer {
       qr.make();
       return { ...pairing, qrSvg: qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true }) };
     });
-    this.handle('/runtime', (body) => service.runtime(body.config ?? {}));
-    this.handle('/nowplaying', (body) => service.nowPlaying(body.servers ?? []));
-    this.handle('/plexpass/ack', () => service.acknowledgePlexPass());
-    // Runs a command once with sample values, so it can be checked from Settings.
-    const quiet = { debug() {}, info() {}, warn() {}, error() {} };
-    this.handle('/commands/test', (body) => new CommandRunner(quiet, 15_000).run(
-      { id: 'test', name: String(body.name ?? 'Test'), command: String(body.command ?? '') },
-      { sensor: 'Media Playing', state: 'on', title: 'Test Movie', type: 'movie', library: 'Movies', player: 'Living Room', user: 'Test User' },
-    ));
-    this.handle('/reset', (body) => service.resetPlugin(webhook(body)));
+
     this.handle('/signin/start', (body) => service.startSignIn(body.mode === 'code' ? 'code' : 'browser'));
     this.handle('/signin/check', () => service.checkSignIn());
     this.handle('/signout', () => service.signOut());
+    this.handle('/reset', (body) => service.resetPlugin(webhook(body)));
+
     this.handle('/servers', () => service.servers());
-    this.handle('/servers/select', (body) => service.selectServers(Array.isArray(body.ids) ? body.ids : []));
+    this.handle('/servers/select', (body) => service.selectServers(list(body.ids)));
     this.handle('/discover', (body) => service.discover(body.servers ?? []));
+    this.handle('/nowplaying', (body) => service.nowPlaying(body.servers ?? []));
+
     this.handle('/webhook/status', (body) => service.webhookStatus(webhook(body)));
-    this.handle('/webhook/add', (body) => service.addWebhook(webhook(body)));
-    this.handle('/webhook/update', (body) => service.updateWebhooks(webhook(body), {
-      add: body.add === true,
-      remove: Array.isArray(body.remove) ? body.remove.filter((url) => typeof url === 'string') : [],
-    }));
+    this.handle('/webhook/update', (body) => service.updateWebhooks(webhook(body), { add: body.add === true, remove: list(body.remove) }));
     this.handle('/webhook/remove', (body) => service.removeWebhook(webhook(body)));
-    this.handle('/diagnostics', (body) => service.diagnostics({
+
+    this.handle('/commands/test', (body) => new CommandRunner(QUIET, 15_000).run(
+      { id: 'test', name: String(body.name ?? 'Test'), command: String(body.command ?? '') },
+      SAMPLE_CONTEXT,
+    ));
+    this.handle('/diagnostics', (body) => diagnosticsReport(service, {
       config: body.config ?? {},
       servers: body.servers ?? [],
       homebridgeVersion: body.homebridgeVersion,
       nodeVersion: process.version,
+      timeZone: typeof body.timeZone === 'string' ? body.timeZone.slice(0, 80) : undefined,
       includeNames: body.includeNames === true,
-    }));
-    this.handle('/report', (body) => service.report({
-      config: body.config ?? {},
-      servers: body.servers ?? [],
-      homebridgeVersion: body.homebridgeVersion,
-      nodeVersion: process.version,
-    }));
+    }, new Date()));
     this.ready();
   }
 
-  /** Wraps a handler so failures reach the page as a readable message, never with a token. */
+  /** Registers a handler whose failures reach the page as a readable message, never with a token. */
   handle(path, handler) {
     this.onRequest(path, async (body) => {
       try {

@@ -41,7 +41,7 @@ class FakeSensor {
 }
 
 const SENSORS = [
-  { id: 'playing', name: 'Movie Playing', type: 'occupancy', state: 'playing' },
+  { id: 'playing', name: 'Movie Playing', type: 'occupancy', state: 'playing', except: ['credits'] },
   { id: 'credits', name: 'Credits Rolling', type: 'button', events: ['credits.start'] },
   { id: 'paused', name: 'Movie Paused', type: 'button', events: ['pause'] },
   { id: 'other-tv', name: 'Bedroom', type: 'occupancy', state: 'active', filters: { players: ['BEDROOM'] } },
@@ -221,7 +221,7 @@ test('Every State through a movie with a mid-credits scene: exactly one sensor o
   const states = ['playing', 'paused', 'credits', 'idle'];
   const config = parseConfig({
     servers: [{ id: 'server-1', name: 'Plex', url: 'http://plex' }],
-    sensors: states.map((state) => ({ id: state, name: state, type: 'occupancy', state })),
+    sensors: states.map((state) => ({ id: state, name: state, type: 'occupancy', state, except: ['playing', 'paused'].includes(state) ? ['credits'] : [] })),
   }, silentLog);
   const sensors = config.sensors.map((sensor) => new FakeSensor(sensor));
   const controller = new Controller({

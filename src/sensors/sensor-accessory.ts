@@ -44,8 +44,8 @@ export class SensorAccessory {
     }
   }
 
-  get id(): string {
-    return this.config.id;
+  get isActive(): boolean {
+    return this.active;
   }
 
   /** Returns true when the state changed. */

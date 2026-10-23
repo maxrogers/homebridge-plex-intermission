@@ -5,30 +5,33 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the report. **Never paste your Plex token.** "About this setup" on the Advanced page leaves it out.
+        Thanks for reporting this. The quickest way to a fix is the diagnostics file: in the plugin's settings,
+        open **Settings**, then **Diagnostics**, and press **Download diagnostics** soon after the problem.
+        It never contains your Plex sign-in, and titles and names are replaced unless you choose to include them.
   - type: input
     id: version
     attributes:
       label: Plugin version
-      placeholder: "0.1.0"
+      placeholder: "1.0.0"
     validations:
       required: true
   - type: input
     id: environment
     attributes:
       label: Homebridge, Node.js and how Homebridge runs
-      placeholder: "Homebridge 2.4.0, Node 22, Docker (host network) on Unraid"
+      placeholder: "Homebridge UI 5.29.0, Node.js 24, Docker on Unraid"
     validations:
       required: true
   - type: input
     id: plex
     attributes:
       label: Plex Media Server version and the player app
-      placeholder: "1.43.4, Plex for Apple TV"
+      placeholder: "1.43.5, Plex for Apple TV"
   - type: textarea
     id: what
     attributes:
-      label: What happened, and what you expected
+      label: What happened, when, and what you expected
+      description: The time it happened helps find it in the log.
     validations:
       required: true
   - type: textarea
@@ -36,8 +39,7 @@ body:
     attributes:
       label: Steps to reproduce
   - type: textarea
-    id: report
+    id: diagnostics
     attributes:
-      label: Debug report or log lines
-      description: Turn on Detailed logging (Advanced), reproduce the problem, then paste "About this setup" from the Advanced page and the log lines.
-      render: text
+      label: Diagnostics
+      description: Attach the diagnostics file (drag it here), or paste its text.

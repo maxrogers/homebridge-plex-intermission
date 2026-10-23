@@ -9,9 +9,9 @@ import type { Logger } from './engine/types.js';
  * shared copy can replace them with placeholders such as "Title 1".
  */
 const MARK = '⁣';
-export type PrivateKind = 'title' | 'person' | 'player' | 'command';
+type PrivateKind = 'title' | 'person' | 'player' | 'command';
 
-export function privateValue(kind: PrivateKind, value: string | undefined): string {
+function privateValue(kind: PrivateKind, value: string | undefined): string {
   return value === undefined || value === '' ? '' : `${MARK}${kind}:${value}${MARK}`;
 }
 export const title = (value?: string) => privateValue('title', value);
@@ -83,7 +83,7 @@ function format(message: string, parameters: unknown[]): string {
   }) + (index < parameters.length ? ` ${parameters.slice(index).map(String).join(' ')}` : '');
 }
 
-export const DIAGNOSTICS_FILE = 'diagnostics.log';
+const DIAGNOSTICS_FILE = 'diagnostics.log';
 const PREVIOUS_FILE = 'diagnostics.1.log';
 
 /**

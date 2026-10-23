@@ -13,7 +13,7 @@ export const WEBHOOK_EVENTS = [
   'admin.database.corrupted',
 ] as const;
 
-export const ENGINE_EVENTS: readonly EngineEventType[] = ['play', 'pause', 'resume', 'stop', 'seek', 'credits.start', 'credits.cancel', 'intro.start', 'intro.end'];
+const ENGINE_EVENTS: readonly EngineEventType[] = ['play', 'pause', 'resume', 'stop', 'seek', 'credits.start', 'credits.cancel', 'intro.start', 'intro.end'];
 
 export type WebhookOnlyEvent = (typeof WEBHOOK_EVENTS)[number];
 export type TriggerEvent = EngineEventType | WebhookOnlyEvent;
@@ -28,15 +28,16 @@ export type StateCondition = (typeof STATE_CONDITIONS)[number];
 /** Moments a Playing, Paused or Playing or paused sensor can leave out. */
 export const EXCEPTIONS = ['credits', 'intro'] as const;
 export type Exception = (typeof EXCEPTIONS)[number];
+const CAN_EXCEPT: readonly StateCondition[] = ['playing', 'paused', 'active'];
 
 export const SENSOR_TYPES = ['occupancy', 'motion', 'contact', 'button'] as const;
 export type SensorType = (typeof SENSOR_TYPES)[number];
 
+/** Empty lists allow everything. Libraries are `serverId/sectionId` keys. */
 export interface SensorFilters {
   players: string[];
   users: string[];
   libraries: string[];
-  mediaTypes: string[];
 }
 
 /**
@@ -85,7 +86,6 @@ export interface IntermissionConfig {
   name: string;
   /** Links the config to the saved sign-in; see Credentials.setupId. */
   setupId?: string;
-  /** Servers to watch. Older configs with a single `server` are read as a list of one. */
   servers: ServerConfig[];
   sensors: SensorConfig[];
   webhook: WebhookConfig;
@@ -99,7 +99,22 @@ export interface IntermissionConfig {
 
 export const DEFAULT_WEBHOOK_PORT = 32550;
 /** Used for movies and episodes that have no credits marker, unless the user turns it off. */
-export const DEFAULT_FALLBACK_PERCENT = 95;
+const DEFAULT_FALLBACK_PERCENT = 95;
+
+/**
+ * A name the Home app accepts: letters, numbers, spaces and common punctuation, starting and ending
+ * with a letter or number (HAP-NodeJS warns about anything else, and Home may refuse the accessory).
+ */
+export function homeKitName(name: string, fallback = 'Sensor'): string {
+  const cleaned = name
+    .replace(/[^\p{L}\p{N}\p{Zs}\u2019'&!._:;()/,-]/gu, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+  if (cleaned.length >= 2) {
+    return cleaned;
+  }
+  return cleaned ? `${cleaned} ${fallback}` : fallback;
+}
 
 type Raw = Record<string, unknown>;
 
@@ -107,6 +122,7 @@ const asRecord = (value: unknown): Raw => (value && typeof value === 'object' &&
 const asString = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined);
 const asStrings = (value: unknown): string[] => (Array.isArray(value) ? value.flatMap((v) => asString(v) ?? []) : []);
 
+/** A number of seconds from the config, clamped to [min, max] and returned in milliseconds. */
 function seconds(raw: Raw, key: string, fallbackMs: number, min: number, max: number): number {
   const value = raw[key];
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -114,6 +130,9 @@ function seconds(raw: Raw, key: string, fallbackMs: number, min: number, max: nu
   }
   return Math.round(Math.min(max, Math.max(min, value)) * 1000);
 }
+
+/** Like `seconds`, for a setting stored in minutes. */
+const minutes = (raw: Raw, key: string, fallbackMs: number, min: number, max: number) => seconds(raw, key, fallbackMs / 60, min, max) * 60;
 
 /**
  * Reads the platform block of config.json. Unknown or out-of-range values fall back to defaults
@@ -123,14 +142,11 @@ export function parseConfig(raw: unknown, log: Logger): IntermissionConfig {
   const config = asRecord(raw);
   const timing = asRecord(config.timing);
   const webhook = asRecord(config.webhook);
-  const server = asRecord(config.server);
 
   const fallback = timing.fallbackPercent;
   const engine: EngineSettings = {
     creditsOffsetMs: seconds(timing, 'creditsOffset', DEFAULT_ENGINE_SETTINGS.creditsOffsetMs, 0, 120),
-    creditsMode: timing.midCredits === 'first' || timing.midCredits === 'final' || timing.midCredits === 'scenes'
-      ? timing.midCredits
-      : (timing.firstCreditsMarker === false ? 'final' : DEFAULT_ENGINE_SETTINGS.creditsMode),
+    creditsMode: timing.midCredits === 'first' || timing.midCredits === 'final' ? timing.midCredits : 'scenes',
     fallbackPercent: fallback === null
       ? null
       : (typeof fallback === 'number' && Number.isFinite(fallback) ? Math.min(99, Math.max(50, Math.round(fallback))) : DEFAULT_FALLBACK_PERCENT),
@@ -141,15 +157,14 @@ export function parseConfig(raw: unknown, log: Logger): IntermissionConfig {
     seekThresholdMs: DEFAULT_ENGINE_SETTINGS.seekThresholdMs,
   };
 
-  // Minutes: 0 turns it off, otherwise 1 to 30.
-  const safetyResyncMs = timing.safetyResync === 0 ? 0 : seconds(timing, 'safetyResync', 5_000, 1, 30) * 60;
+  // 0 turns it off, otherwise 1 to 30 minutes.
+  const safetyResyncMs = timing.safetyResync === 0 ? 0 : minutes(timing, 'safetyResync', 5 * 60_000, 1, 30);
 
   const port = webhook.port;
-
   return {
     name: asString(config.name) ?? 'Intermission',
     setupId: asString(config.setupId),
-    servers: parseServers(Array.isArray(config.servers) ? config.servers : (config.server ? [server] : [])),
+    servers: parseServers(config.servers),
     sensors: parseSensors(config.sensors, log),
     webhook: {
       enabled: webhook.enabled !== false,
@@ -177,7 +192,10 @@ function parseCommands(value: unknown): NamedCommand[] {
   });
 }
 
-function parseServers(value: unknown[]): ServerConfig[] {
+function parseServers(value: unknown): ServerConfig[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
   const seen = new Set<string>();
   return value.flatMap((entry) => {
     const server = asRecord(entry);
@@ -224,8 +242,9 @@ function parseSensors(value: unknown, log: Logger): SensorConfig[] {
   return value.flatMap((entry, index) => {
     const sensor = asRecord(entry);
     const id = asString(sensor.id);
-    const name = asString(sensor.name);
+    const given = asString(sensor.name);
     const type = SENSOR_TYPES.find((t) => t === sensor.type);
+    const name = given && homeKitName(given, type === 'button' ? 'Button' : 'Sensor');
     if (!id || !name || !type || seen.has(id)) {
       log.warn('Skipping sensor %d: it needs a unique id, a name and a type.', index + 1);
       return [];
@@ -247,7 +266,6 @@ function parseSensors(value: unknown, log: Logger): SensorConfig[] {
         players: asStrings(filters.players),
         users: asStrings(filters.users),
         libraries: asStrings(filters.libraries),
-        mediaTypes: asStrings(filters.mediaTypes),
       },
       media: type === 'button' ? {} : parseMedia(sensor.media),
     };
@@ -257,13 +275,9 @@ function parseSensors(value: unknown, log: Logger): SensorConfig[] {
         log.warn('Sensor "%s" has no events, so it will never trigger.', name);
       }
     } else {
-      // Older configs: "playing-any" was playing including the credits; "playing" and "paused" left the credits out.
-      const raw = sensor.state === 'playing-any' ? 'playing' : sensor.state;
-      parsed.state = STATE_CONDITIONS.find((c) => c === raw) ?? 'playing';
-      const excepted = Array.isArray(sensor.except)
-        ? asStrings(sensor.except).filter((e): e is Exception => (EXCEPTIONS as readonly string[]).includes(e))
-        : (sensor.state === 'playing' || sensor.state === 'paused' ? ['credits' as const] : []);
-      parsed.except = ['playing', 'paused', 'active'].includes(parsed.state) ? [...new Set(excepted)] : [];
+      parsed.state = STATE_CONDITIONS.find((c) => c === sensor.state) ?? 'playing';
+      const excepted = asStrings(sensor.except).filter((e): e is Exception => (EXCEPTIONS as readonly string[]).includes(e));
+      parsed.except = CAN_EXCEPT.includes(parsed.state) ? [...new Set(excepted)] : [];
     }
     return [parsed];
   });

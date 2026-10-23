@@ -35,7 +35,7 @@ export const CREDITS_MODES = {
   final: { label: 'Final credits only', help: 'Earlier credits and mid-credits scenes count as playing. Credits start at the final credits, or the first credits if there are no scenes.' },
 };
 export function creditsMode(timing = {}) {
-  return timing.midCredits ?? (timing.firstCreditsMarker === false ? 'final' : 'scenes');
+  return CREDITS_MODES[timing.midCredits] ? timing.midCredits : 'scenes';
 }
 
 /** Whether a sensor's behavior depends on what counts as the credits. */
@@ -64,16 +64,14 @@ export const EVENTS = {
   'admin.database.corrupted': { label: 'Database corrupted', phrase: 'the database is corrupted', plexPass: true },
 };
 
-export const MEDIA_TYPES = { movie: 'Movies and other videos', episode: 'TV episodes', track: 'Music', photo: 'Photos', clip: 'Video clips' };
-
-/** Library kinds from discovery, how they are labelled, and what Plex plays from them. */
+/** Library kinds from discovery: how each is labelled, and whether setup chooses it for you. */
 export const LIBRARY_KINDS = {
-  movie: { label: 'Movies', mediaTypes: ['movie'], preselect: true },
-  show: { label: 'TV Shows', mediaTypes: ['episode'], preselect: true },
-  other: { label: 'Other Videos', mediaTypes: ['movie'] },
-  music: { label: 'Music', mediaTypes: ['track'] },
-  photo: { label: 'Photos', mediaTypes: ['photo', 'clip'] },
-  livetv: { label: 'Live TV', mediaTypes: ['episode', 'movie'] },
+  movie: { label: 'Movies', preselect: true },
+  show: { label: 'TV Shows', preselect: true },
+  other: { label: 'Other Videos' },
+  music: { label: 'Music' },
+  photo: { label: 'Photos' },
+  livetv: { label: 'Live TV' },
 };
 
 /* ---------- media conditions ---------- */
@@ -116,12 +114,6 @@ export function describeFacts(facts) {
   };
 }
 
-/** Media types the chosen libraries can play, in display order. */
-export function availableMediaTypes(libraries) {
-  const types = new Set((libraries ?? []).flatMap((l) => LIBRARY_KINDS[l.kind]?.mediaTypes ?? []));
-  return Object.keys(MEDIA_TYPES).filter((type) => types.has(type));
-}
-
 /** Advanced settings. Values are stored in config `timing` in seconds; `scale` converts for display. */
 export const TIMING_FIELDS = [
   { key: 'creditsOffset', label: 'Credits offset', help: 'Wait this long after the credits marker. Never earlier than the marker.', unit: 's', min: 0, max: 120, default: 0 },
@@ -129,7 +121,7 @@ export const TIMING_FIELDS = [
   { key: 'pauseDebounce', label: 'Pause debounce', help: 'Pauses shorter than this are ignored, so skips and quick pause-play bursts don\'t change any sensor. Apple TV skips take up to about 1.3 seconds.', unit: 's', min: 0, max: 30, step: 0.5, default: 1.5 },
   { key: 'stopHold', label: 'Stop hold', help: 'After playback stops near the end of an item, sensors keep their state this long in case the next episode autoplays. A stop anywhere else counts after 1 second. Raise it if your player\'s autoplay countdown is longer.', unit: 's', min: 0, max: 60, default: 10 },
   { key: 'minItemLength', label: 'Minimum item length', help: 'Shorter items, such as trailers, are ignored. 0 turns this off.', unit: 'min', scale: 60, min: 0, max: 60, default: 0 },
-  { key: 'safetyResync', label: 'Safety re-sync', help: 'Only while the connection to Plex is down and something plays. 0 turns this off.', unit: 'min', scale: 60, storedIn: 'min', min: 0, max: 30, default: 5 },
+  { key: 'safetyResync', label: 'Safety re-sync', help: 'How often to re-read playback while the connection to Plex is down and something is playing. 0 turns this off.', unit: 'min', scale: 60, storedIn: 'min', min: 0, max: 30, default: 5 },
 ];
 
 export const DEFAULT_WEBHOOK_PORT = 32550;
@@ -149,18 +141,35 @@ export function newChildBridge(random = (n) => globalThis.crypto.getRandomValues
   return { username, port, name: 'Intermission' };
 }
 
+/**
+ * A name the Home app accepts: letters, numbers, spaces and common punctuation, starting and ending
+ * with a letter or number (HAP-NodeJS warns about anything else, and Home may refuse the accessory).
+ */
+export function homeKitName(name, fallback = 'Sensor') {
+  const cleaned = name
+    .replace(/[^\p{L}\p{N}\p{Zs}\u2019'&!._:;()/,-]/gu, '')
+    .replace(/\s+/g, ' ')
+    .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '');
+  if (cleaned.length >= 2) {
+    return cleaned;
+  }
+  return cleaned ? `${cleaned} ${fallback}` : fallback;
+}
+
 export function sensorId() {
   const bytes = new Uint8Array(4);
   globalThis.crypto.getRandomValues(bytes);
   return `s-${[...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
 }
 
-const emptyFilters = () => ({ players: [], users: [], libraries: [], mediaTypes: [] });
+const emptyFilters = () => ({ players: [], users: [], libraries: [] });
 
-export function newSensor(type = 'occupancy') {
+/** A new sensor or button, starting from the setup's players, people and libraries when given. */
+export function newSensor(type = 'occupancy', selection) {
+  const filters = selection ? filtersFrom(selection) : emptyFilters();
   return SENSOR_TYPES[type].state
-    ? { id: sensorId(), name: 'New sensor', type, state: 'playing', except: ['credits'], filters: emptyFilters() }
-    : { id: sensorId(), name: 'New button', type, events: ['play'], filters: emptyFilters() };
+    ? { id: sensorId(), name: 'New sensor', type, state: 'playing', except: ['credits'], filters }
+    : { id: sensorId(), name: 'New button', type, events: ['play'], filters };
 }
 
 /** Filters for the choices made during setup: the chosen players, users and libraries. */
@@ -169,7 +178,6 @@ export function filtersFrom(selection) {
     players: selection.allPlayers ? [] : (selection.players ?? []).map((p) => p.id),
     users: selection.allUsers === false ? [...(selection.users ?? [])] : [],
     libraries: selection.allLibraries ? [] : (selection.libraries ?? []).map((l) => l.key),
-    mediaTypes: [],
   };
 }
 
@@ -292,7 +300,7 @@ export function groupIntact(members) {
   const want = preset.sensors.map((s) => `${s.state}:${[...(s.except ?? [])].sort().join('+')}`).sort();
   const have = members.map((s) => (SENSOR_TYPES[s.type]?.state ? key(s) : 'button')).sort();
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  const scope = (s) => [s.filters?.players ?? [], s.filters?.users ?? [], s.filters?.libraries ?? [], s.filters?.mediaTypes ?? [], s.media ?? {}]
+  const scope = (s) => [s.filters?.players ?? [], s.filters?.users ?? [], s.filters?.libraries ?? [], s.media ?? {}]
     .map((v) => (Array.isArray(v) ? [...v].sort() : v));
   return same(want, have) && members.every((m) => same(scope(m), scope(members[0])));
 }
@@ -338,10 +346,7 @@ export function summarize(sensor, selection = {}) {
     : `Pressed when ${list((sensor.events ?? []).map((e) => EVENTS[e]?.phrase ?? e), 'nothing (choose an event)')}`;
   const f = sensor.filters ?? emptyFilters();
   const where = list(f.players.map((id) => name(selection.players, id, 'name')), 'any player');
-  const what = list([
-    ...f.libraries.map((key) => name(selection.libraries, key, 'title', 'key')),
-    ...f.mediaTypes.map((t) => MEDIA_TYPES[t] ?? t),
-  ], 'anything');
+  const what = list(f.libraries.map((key) => name(selection.libraries, key, 'title', 'key')), 'anything');
   const who = list(f.users, 'anyone');
   const media = SENSOR_TYPES[sensor.type]?.state ? mediaPhrases(sensor.media) : [];
   return `${when}, on ${where}, for ${what}${media.length ? ` with ${media.join(', ')}` : ''}, by ${who}.`;
@@ -361,10 +366,11 @@ export function timingValue(timing, field) {
   return field.scale && field.storedIn !== 'min' ? Math.round(stored / field.scale) : stored;
 }
 
-/** Writes a displayed value back to config `timing`, clamped to the field's range. */
+/** Writes a displayed value back to config `timing`, clamped to the field's range. An empty field means the default. */
 export function setTiming(timing, field, value) {
   const step = field.step ?? 1;
-  const number = Math.min(field.max, Math.max(field.min, Math.round(Number(value) / step) * step));
+  const typed = String(value ?? '').trim() === '' ? NaN : Number(value);
+  const number = Math.min(field.max, Math.max(field.min, Math.round(typed / step) * step));
   const next = { ...timing };
   if (!Number.isFinite(number) || number === field.default) {
     delete next[field.key];

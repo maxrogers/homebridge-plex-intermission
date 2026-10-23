@@ -1,7 +1,9 @@
+import { timingSafeEqual } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 
 import type { Logger } from '../engine/types.js';
+import { describe } from '../errors.js';
 import { extractWebhookPayload } from './multipart.js';
 
 export interface WebhookServerOptions {
@@ -17,6 +19,8 @@ export interface WebhookServerOptions {
 /** Receives Plex webhooks on `http://<host>:<port>/<secret>`. */
 export class WebhookServer extends EventEmitter<{ payload: [unknown] }> {
   private server?: Server;
+  /** When a request to another address was last logged; such requests are logged at most once a minute. */
+  private rejectedLoggedAt = 0;
 
   constructor(private readonly options: WebhookServerOptions) {
     super();
@@ -24,6 +28,13 @@ export class WebhookServer extends EventEmitter<{ payload: [unknown] }> {
 
   get path(): string {
     return `/${this.options.secret}`;
+  }
+
+  /** Compares in constant time, so response timing reveals nothing about the key. */
+  private isOurs(path: string): boolean {
+    const expected = Buffer.from(this.path);
+    const actual = Buffer.from(path);
+    return actual.length === expected.length && timingSafeEqual(actual, expected);
   }
 
   /** The port actually listened on (useful when configured as 0), or undefined when stopped. */
@@ -68,15 +79,20 @@ export class WebhookServer extends EventEmitter<{ payload: [unknown] }> {
   }
 
   private handle(request: IncomingMessage, response: ServerResponse): void {
-    const path = (request.url ?? '').split('?')[0];
-    if (request.method === 'GET' && path === this.path) {
+    const ours = this.isOurs((request.url ?? '').split('?')[0] ?? '');
+    if (request.method === 'GET' && ours) {
       // Lets the settings page confirm that this port belongs to Intermission.
       response.writeHead(200, { 'Content-Type': 'application/json' }).end('{"app":"intermission"}');
       return;
     }
-    if (request.method !== 'POST' || path !== this.path) {
+    if (request.method !== 'POST' || !ours) {
       response.writeHead(404).end();
       request.resume();
+      if (Date.now() - this.rejectedLoggedAt > 60_000) {
+        this.rejectedLoggedAt = Date.now();
+        // An old Intermission address still registered in Plex shows up here; the key itself is never logged.
+        this.options.log.debug('Webhook port: ignored a %s from %s to an address that isn\'t this Homebridge\'s webhook.', request.method, request.socket.remoteAddress ?? 'unknown');
+      }
       return;
     }
     const limit = this.options.maxBodyBytes ?? 1_000_000;
@@ -101,7 +117,11 @@ export class WebhookServer extends EventEmitter<{ payload: [unknown] }> {
         this.options.log.debug('Ignored a webhook without a readable payload');
         return;
       }
-      this.emit('payload', payload);
+      try {
+        this.emit('payload', payload);
+      } catch (error) {
+        this.options.log.error('Error handling a Plex webhook: %s', describe(error));
+      }
     });
     request.on('error', (error) => this.options.log.debug('Webhook request failed: %s', error.message));
   }

@@ -1,3 +1,4 @@
+import { describe } from '../errors.js';
 import { LIVE_TV_SECTION } from './convert.js';
 import type { PlexDevice, PlexHomeUser, PlexTv } from './plex-tv.js';
 import type { PlexLibrary, PlexServer } from './server.js';
@@ -148,8 +149,4 @@ export async function discover(servers: readonly ServerToDiscover[], plexTv: Ple
       error: 'error' in server.libraries ? describe(server.libraries.error) : undefined,
     })),
   };
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

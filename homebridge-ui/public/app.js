@@ -1,8 +1,9 @@
 import { DEVICE_ICONS, deviceIcon, LIBRARY_ICONS, PEOPLE_ICONS, SENSOR_ICONS } from './device-icons.js';
+import { guideTab } from './guide.js';
 import {
-  CONDITIONS, DEFAULT_WEBHOOK_PORT, EVENTS, EXCEPTIONS, CAN_EXCEPT, CREDITS_MODES, LIBRARY_KINDS, MEDIA_TYPES, PLATFORM, PRESETS, DEFAULT_PRESET, SENSOR_TYPES, TIMING_FIELDS,
+  CONDITIONS, DEFAULT_WEBHOOK_PORT, EVENTS, EXCEPTIONS, CAN_EXCEPT, CREDITS_MODES, LIBRARY_KINDS, PLATFORM, PRESETS, DEFAULT_PRESET, SENSOR_TYPES, TIMING_FIELDS,
   SHAPES, RESOLUTIONS, DYNAMIC_RANGES, RATINGS,
-  applyPreset, availableMediaTypes, defaultSelection, creditsMode, describeFacts, groupIntact, groupPreset, hasMediaConditions, presetsInUse, libraryRef, needsPlexPass, presetSensors, sensorId, usesCredits,
+  applyPreset, defaultSelection, creditsMode, describeFacts, groupIntact, groupPreset, hasMediaConditions, homeKitName, libraryRef, needsPlexPass, presetSensors, sensorId, usesCredits,
   reconcileSelection, reconcileSensors, newChildBridge, newSensor, playerRef, setTiming, summarize, timingValue,
 } from './model.js';
 
@@ -113,10 +114,6 @@ async function start() {
   await checkRuntime(configs[0] ?? {});
   state.config = configs[0] ?? { platform: PLATFORM, name: 'Intermission' };
   state.config.sensors ??= [];
-  if (state.config.server && !state.config.servers) {
-    state.config.servers = [state.config.server];
-    delete state.config.server;
-  }
   try {
     state.status = await request('/status', { setupId: state.config.setupId });
   } catch (error) {
@@ -381,7 +378,7 @@ async function refreshFromPlex() {
     state.discovery = await request('/discover', { servers: servers() });
     await refreshWebhook();
     if (state.tab === 'advanced' && state.report) {
-      state.report = await request('/diagnostics', { ...reportBody(), includeNames: state.includeNames === true });
+      await loadDiagnostics();
     }
   });
 }
@@ -391,7 +388,17 @@ function reportBody() {
   return {
     ...webhookBody(),
     homebridgeVersion: `${env.packageVersion ?? '?'}${env.runningInDocker ? ', Docker' : ''}`,
+    timeZone: timeZone(),
   };
+}
+
+/** This browser's time zone and UTC offset, for example "America/Denver (UTC-06:00)". */
+function timeZone() {
+  const minutes = -new Date().getTimezoneOffset();
+  const abs = Math.abs(minutes);
+  const offset = `UTC${minutes < 0 ? '-' : '+'}${String(Math.floor(abs / 60)).padStart(2, '0')}:${String(abs % 60).padStart(2, '0')}`;
+  const name = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return name ? `${name} (${offset})` : offset;
 }
 
 /* ---------- views ---------- */
@@ -559,7 +566,7 @@ function template() {
 function main() {
   const tabs = { sensors: 'Sensors', recipes: 'Guide', advanced: 'Settings' };
   const nav = Object.entries(tabs).map(([id, label]) => `<button class="im-tab" role="tab" aria-selected="${state.tab === id}" data-action="tab" data-id="${id}">${label}</button>`).join('');
-  const content = { sensors: sensorsTab, recipes: recipesTab, advanced: advancedTab }[state.tab]();
+  const content = { sensors: sensorsTab, recipes: () => guideTab(state.config.sensors, collapsible), advanced: advancedTab }[state.tab]();
   const pass = state.status.plexPass === undefined ? ''
     : `<button class="im-badge ${state.status.plexPass ? 'on' : ''}" data-action="open-webhooks" title="Plex Pass and webhooks">${state.status.plexPass ? 'Plex Pass' : 'No Plex Pass'}</button>`;
   return `<div class="im-header">
@@ -724,8 +731,6 @@ function editor(sensor, sel) {
   const users = [...new Set([...(sel.users ?? []), ...(state.discovery?.users ?? []).map((u) => u.name)])];
   const libraries = knownLibraries();
   const many = new Set(libraries.map((l) => l.serverId)).size > 1;
-  const chosenLibraries = sensor.filters.libraries.length > 0 ? libraries.filter((l) => sensor.filters.libraries.includes(l.key)) : libraries;
-  const mediaTypes = availableMediaTypes(chosenLibraries);
   const noPass = state.status.plexPass === false;
   const confirming = state.confirming === `delete:${sensor.id}`;
   return `<div class="im-editor" data-sensor="${escape(sensor.id)}">
@@ -750,8 +755,6 @@ function editor(sensor, sel) {
     ${filter('users', users, (u) => u, 'All Plex Home users')}
     <label class="im-label">Libraries</label>
     ${filter('libraries', libraries, (l) => (many ? `${l.title} · ${l.serverName}` : l.title), 'All libraries')}
-    ${sensor.filters.mediaTypes.length > 0 ? `<label class="im-label">Media types <span>(from an older version; libraries now decide this)</span></label>
-      ${filter('mediaTypes', mediaTypes, (t) => MEDIA_TYPES[t], 'All media types')}` : ''}
     ${isState ? mediaSection(sensor) : ''}
     ${runCommands(sensor)}
     <p class="im-hint mt-2">Intermission knows each library's type: Movies and TV Shows get credits and intro handling; Music, Photos, Other Videos and Live TV just follow play, pause and stop.</p>
@@ -875,7 +878,6 @@ function portRow(hook) {
   return { key, tone };
 }
 
-/** Plex Pass, server settings, the account's webhooks with remove buttons, and Intermission's. */
 /** What an account without Plex Pass does not get. Shown only to those accounts. */
 function noPlexPassSummary() {
   return `<div class="im-status warn"><span class="im-dot"></span><div>
@@ -889,6 +891,7 @@ function noPlexPassSummary() {
     </div></div>`;
 }
 
+/** Plex Pass, server settings, the account's webhooks with remove buttons, and Intermission's. */
 function webhookPanel() {
   const hook = state.webhook;
   if (!hook) {
@@ -931,7 +934,7 @@ function webhookPanel() {
     <ul class="im-urls">${existing || '<li class="im-muted">None yet.</li>'}</ul>
     ${adding ? `<label class="im-row im-add">
         <input type="checkbox" class="form-check-input" data-webhook-add ${plan.add ? 'checked' : ''}>
-        <span><strong>Add the Intermission webhook</strong><br><code>${escape(hook.url ?? 'No address found. Set one under Advanced.')}</code></span>
+        <span><strong>Add the Intermission webhook</strong><br><code>${escape(hook.url ?? 'No address found. Set one in Webhook options below.')}</code></span>
       </label>` : ''}
     <p class="im-hint">The last part of the address is a random key made for this Homebridge. Intermission ignores anything sent without it, so stray requests on your network can't set off your lights. Nothing else on your account changes; webhooks you mark with − are removed.</p>`;
 }
@@ -949,138 +952,6 @@ function webhooks() {
       ${changes ? '<button class="btn btn-outline-secondary" data-action="webhooks-skip">Skip for now</button>' : ''}
       ${cancelSetup()}
     </div>`;
-}
-
-function recipesTab() {
-  const step = (html) => `<li>${html}</li>`;
-  const inUse = presetsInUse(state.config.sensors);
-  const head = (id, name) => `<div class="im-preset-head mt-4" data-preset="${id}"><h5 class="m-0">${name}${inUse.includes(id) ? ' <span class="im-badge on">In use</span>' : ''}</h5>
-    ${inUse.includes(id) ? '' : `<button class="btn btn-sm btn-outline-secondary ms-auto" data-action="pick-preset" data-id="${id}">Add this preset</button>`}</div>`;
-  /** One automation: the trigger, then either a plain light setting or a shortcut recipe. */
-  const auto = (sensor, when, what, recipe) => `<div class="im-auto">
-      <div class="im-auto-when"><span class="im-badge">${when === 'off' ? 'Stops detecting' : 'Detects occupancy'}</span> <strong>${sensor}</strong></div>
-      <div class="im-auto-what">${what}</div>${recipe ?? ''}</div>`;
-  /**
-   * Shortcut steps as the Home app's shortcut editor shows them: [action, detail, indented]. `check`
-   * expands to If, Stop this shortcut and End If.
-   */
-  const recipe = (name, steps, note) => `<div class="im-shortcut"><div class="im-shortcut-name">${name}</div><ol>
-      ${steps.flatMap((x) => (Array.isArray(x[0]) ? x : [x])).map(([action, detail, indent]) => `<li><span class="im-sc-action${indent ? ' im-sc-indent' : ''}">${action}</span> ${detail}</li>`).join('')}</ol>${note ? `<p class="im-hint mt-1 mb-0">${note}</p>` : ''}</div>`;
-  const set = (level) => ['Set', `your lights to <strong>${level}</strong>`];
-  const wait = (seconds = 1) => ['Wait', `${seconds} second${seconds === 1 ? '' : 's'}`];
-  const check = (sensor, value) => [
-    ['If', `<strong>${sensor}</strong> Occupancy Detected is <strong>${value}</strong>`],
-    ['Stop this shortcut', '', true],
-    ['End If', ''],
-  ];
-  const fadeUp = (sensor) => recipe('Gentle fade up (about 3 seconds)', [set('10%'), wait(), check(sensor, 'Yes'), set('18%'), wait(), check(sensor, 'Yes'), set('25%')],
-    'The checks stop the fade at once if playback comes back mid-fade, for example a mid-credits scene.');
-  const crawl = recipe('Slow crawl (about 7 seconds)', [set('1%'), wait(), set('2%'), wait(), set('3%'), wait(), set('5%'), wait(),
-    check('Credits Rolling', 'No'), set('15%'), wait(), set('25%')],
-  'Eases eyes up from the dark before the main fade. Add more 1% steps for a longer crawl.');
-  const fullHouse = recipe('Full house (about 1 second)', [set('60%'), wait(), set('100%')]);
-  const pauseGlow = recipe('Pause glow (about 1 second)', [set('15%'), wait(), set('30%')]);
-    const good = `<ul class="small mb-0">
-      <li><strong>Why suggest sensors, not buttons?</strong> Home can always read a sensor. If it misses a change (hub restart, Wi-Fi drop, Homebridge restart), it sees the right state when it reconnects. A missed button press is simply gone. Buttons are still available for one-off actions.</li>
-      <li>Pauses under 1.5 seconds, skips and quick pause-play bursts don't change any sensor, so lights never stutter. Adjust it in Settings, Advanced, <strong>Pause debounce</strong>.</li>
-      <li>Movies and TV Shows get credits and intro handling. Music, Photos, Other Videos and Live TV just follow play, pause and stop.</li>
-      <li>What counts as the credits is one setting shared by every sensor, so sensors that follow the credits always agree. By default a mid-credits scene counts as playing.</li>
-      <li>A pause during the credits keeps "In the credits" sensors on, so a fade isn't interrupted.</li>
-      <li>Stopping partway through counts after 1 second. Autoplaying the next episode isn't a stop: when playback stops in the credits or near the end, sensors wait 10 seconds for the next episode before Nothing Playing turns on. If your player's countdown is longer, raise Settings, Advanced, <strong>Stop hold</strong>.</li>
-      <li>After a Homebridge restart, sensors keep their last state until Plex has been read, so lights don't jump.</li>
-      <li>Renaming a sensor keeps the automations that use it. If you renamed it in the Home app, Home keeps your name. Removing a sensor removes it from Apple Home.</li>
-    </ul>`;
-  return `<div class="im-recipe">
-    ${collapsible('good-to-know', 'Good to know', 'How Intermission behaves, in a few lines.', good, { defaultOpen: true, extraClass: 'im-callout' })}
-
-    <h4 class="mt-4 mb-1">Making the automations</h4>
-    <p class="im-muted small">Intermission makes the sensors; you make the light changes in the Home app. Each preset below lists the automations to make.</p>
-    <div class="im-card"><h6>A plain automation</h6><ol>
-      ${step('In the Home app, open the <strong>Automation</strong> tab and tap <strong>+</strong>.')}
-      ${step('Choose <strong>A Sensor Detects Something</strong>, then your Intermission sensor, for example <strong>Media Playing</strong>.')}
-      ${step('Choose <strong>Detects Occupancy</strong> or <strong>Stops Detecting Occupancy</strong>, as the preset says, then <strong>Next</strong>.')}
-      ${step('Pick your lights or a scene and set the level. Done.')}</ol>
-      ${shots([['when', 'The sensor, Detects Occupancy, then Next', 'Step 3']])}</div>
-    <div class="im-card"><h6>A fade, using a shortcut</h6>
-      <p class="small im-muted mb-2">Apple Home sets lights in one jump. For a fade, the automation runs a short shortcut that steps the lights up, waiting a second between steps. Most smart dimmers already glide between levels, so 1-second steps look smooth.</p><ol>
-      ${step('Make the automation as above. On the screen that lists your lights and scenes, don\'t pick anything.')}
-      ${step('Scroll all the way to the bottom, past every room, and tap <strong>Convert To Shortcut</strong>.')}
-      ${step('The shortcut starts with one <strong>Set</strong> step. Tap <strong>Scenes and Accessories</strong> in it, pick your lights, then tap each light to set its level.')}
-      ${step('Add the rest of the recipe with the search bar at the bottom: <strong>Wait</strong>, <strong>If</strong> (pick your sensor, then <strong>Occupancy Detected</strong>), <strong>Stop this shortcut</strong> and more <strong>Set</strong> steps. Drag steps into order.')}
-      ${step('Tap ✓ to save. Change the levels to suit your room; the shape matters more than the exact numbers.')}</ol>
-      ${shots([
-    ['convert', 'Convert To Shortcut is below the last room', 'Step 2'],
-    ['shortcut-new', 'A new shortcut has one Set step', 'Step 3'],
-    ['set-lights', 'Your lights in the Set step; tap one to set its level', 'Step 3'],
-    ['steps', 'The end of a slow crawl: Wait, If, Stop this shortcut, End If, Set', 'Step 4'],
-  ])}</div>
-
-    ${presetSections({
-    simple: `
-    ${head('simple', 'Simple')}
-    <p class="small mt-2">Best for rooms where the lights just go down while anything plays and come back for everything else, including music. Two automations:</p>
-    ${auto('Media Playing', 'on', 'Set your lights dim (or a scene), in one jump.')}
-    ${auto('Media Playing', 'off', 'Bring the lights back. A fade feels nicer:', fullHouse)}
-`,
-    credits: `
-    ${head('credits', 'Simple + Credits')}
-    <p class="small mt-2">Best for most living rooms and theaters. Still one sensor: it also turns off for the credits, and by default on again for a mid-credits scene. Two automations:</p>
-    ${auto('Media Playing', 'on', 'Set your lights dim, in one jump, so a mid-credits scene goes dark again at once.')}
-    ${auto('Media Playing', 'off', 'Fade up gently. This covers the credits, a pause and the end alike:', fadeUp('Media Playing'))}
-`,
-    states: `
-    ${head('states', 'Every State')}
-    <p class="small mt-2">Best when pause, credits and the end should each look different. Exactly one of the four sensors is on at a time, so each gets one "Detects Occupancy" automation, and none needs "Stops detecting":</p>
-    ${auto('Media Playing', 'on', 'Lights down, in one jump.')}
-    ${auto('Media Paused', 'on', 'A little light, for example just the lamp by the door, or:', pauseGlow)}
-    ${auto('Credits Rolling', 'on', 'A slow fade up. A mid-credits scene switches back to Media Playing on its own.', crawl)}
-    ${auto('Nothing Playing', 'on', 'Normal lighting.', fullHouse)}
-    ${shots([['tiles', 'In the Home app, one of the four is on at a time', 'The sensors'], ['automations', 'The four automations, one per sensor', 'Finished']])}
-    <div class="im-card mt-3"><h6>Ideas for Every State</h6><ul class="small mb-0">
-      <li>Add a condition such as <strong>only after sunset</strong> so daytime watching leaves the lights alone.</li>
-      <li>On <strong>Media Paused</strong>, light the path to the kitchen instead of the whole room.</li>
-      <li>Use color: a warm scene for the credits, a dim blue for pause.</li>
-      <li>Several light zones: give each its own steps in the same shortcut, for example sconces a step ahead of the overhead lights.</li>
-      <li>Go beyond lights: close the shades on Media Playing, open them on Nothing Playing, or switch a fan or soundbar.</li>
-      <li>One sensor per room: give each sensor its own player (Edit, Players), for example "Bedroom Playing".</li>
-    </ul></div>
-`,
-  }, inUse)}
-
-    <h4 class="mt-4 mb-1">Beyond the presets</h4>
-    <div class="im-card"><ul class="small mb-0">
-      <li><strong>Projector masking:</strong> a sensor with "Only when the media is… Wide" turns on only for wide movies. Use it with a command or an automation to switch lens memory.</li>
-      <li><strong>Kids watching:</strong> a sensor limited to ratings such as G and PG, or to one Plex Home user, can keep the lights brighter.</li>
-      <li><strong>Live TV:</strong> choose Live TV under a sensor's Libraries if the lights should follow it too. It never has credits.</li>
-    </ul></div>
-  </div>`;
-}
-
-/**
- * The Guide's presets: the ones in use first, open; the rest folded into one section. With none in
- * use, all are shown.
- */
-function presetSections(sections, inUse) {
-  const ids = PRESETS.map((p) => p.id);
-  const others = ids.filter((id) => !inUse.includes(id));
-  if (inUse.length === 0) {
-    return `<h4 class="mt-4 mb-1">Presets</h4>
-    <p class="im-muted small">"Add this preset" adds its sensors to the Sensors tab.</p>
-    ${ids.map((id) => sections[id]).join('')}`;
-  }
-  const names = (list) => list.map((id) => PRESETS.find((p) => p.id === id).name).join(', ');
-  return `<h4 class="mt-4 mb-1">Your ${inUse.length === 1 ? 'preset' : 'presets'}</h4>
-    <p class="im-muted small">The automations to make for the sensors you have.</p>
-    ${inUse.map((id) => sections[id]).join('')}
-    ${others.length ? `<div class="mt-4">${collapsible('other-presets', 'Other presets', names(others), `<p class="im-muted small mt-2 mb-0">"Add this preset" adds its sensors to the Sensors tab.</p>${others.map((id) => sections[id]).join('')}`)}</div>` : ''}`;
-}
-
-/** Guide screenshots of the Home app. Each is [file, caption, label]; tap one to see it larger. */
-const GUIDE_DIR = new URL('./guide/', import.meta.url).href;
-function shots(list) {
-  return `<div class="im-shots">${list.map(([file, caption, label]) => `<figure class="im-shot">
-      <button type="button" data-action="zoom-shot" aria-label="Show larger: ${caption}"><img src="${GUIDE_DIR}${file}.webp" alt="${caption}" loading="lazy"></button>
-      <figcaption>${label ? `<strong>${label}.</strong> ` : ''}${caption}</figcaption></figure>`).join('')}</div>`;
 }
 
 /** A section that opens on tap; stays open across redraws. */
@@ -1235,7 +1106,9 @@ function diagnosticsCard() {
 }
 
 async function loadDiagnostics() {
-  state.report = await request('/diagnostics', { ...reportBody(), includeNames: state.includeNames === true });
+  const includeNames = state.includeNames === true;
+  state.report = await request('/diagnostics', { ...reportBody(), includeNames });
+  state.reportNames = includeNames;
   return state.report;
 }
 
@@ -1327,7 +1200,6 @@ function addPreset(id, mode) {
 /** Stores a credits mode in config `timing`, leaving out the default. */
 function setCreditsMode(mode) {
   const timing = { ...state.config.timing, midCredits: mode };
-  delete timing.firstCreditsMarker;
   if (mode === 'scenes') {
     delete timing.midCredits;
   }
@@ -1373,13 +1245,58 @@ function confirmThen(key, action) {
   return undefined;
 }
 
-async function copy(text, done) {
+/**
+ * Copies with a selected, off-screen textarea. Works inside Homebridge's settings frame, which may not be
+ * allowed the Clipboard API, but only while the click that asked for it is still being handled.
+ */
+function copySelected(text) {
+  const area = Object.assign(document.createElement('textarea'), { value: text, readOnly: true });
+  area.style.cssText = 'position:fixed;top:0;left:-9999px;opacity:0';
+  document.body.append(area);
+  area.select();
+  let copied;
   try {
-    await navigator.clipboard.writeText(text);
-    homebridge.toast.success(done);
+    copied = document.execCommand('copy');
   } catch {
-    homebridge.toast.info('Select the text and copy it.', 'Copy');
+    copied = false;
   }
+  area.remove();
+  return copied;
+}
+
+/**
+ * Copies `text`, or the text a promise resolves to. Text already at hand is copied at once, inside the
+ * click. Otherwise the Clipboard API is handed the promise, which keeps the click's permission while the
+ * text loads; if the frame doesn't allow that, the text is copied after loading if the browser still
+ * counts the click. Returns false when nothing could be copied.
+ */
+async function copyText(source, done) {
+  const ok = () => {
+    homebridge.toast.success(done);
+    return true;
+  };
+  if (typeof source === 'string') {
+    if (copySelected(source)) {
+      return ok();
+    }
+    try {
+      await navigator.clipboard.writeText(source);
+      return ok();
+    } catch {
+      return false;
+    }
+  }
+  if (navigator.clipboard?.write && typeof ClipboardItem === 'function') {
+    try {
+      const blob = Promise.resolve(source).then((text) => new Blob([text], { type: 'text/plain' }));
+      await navigator.clipboard.write([new ClipboardItem({ 'text/plain': blob })]);
+      return ok();
+    } catch {
+      // Not allowed in this frame; fall through.
+    }
+  }
+  const text = await source;
+  return text ? (copySelected(text) ? ok() : false) : false;
 }
 
 const actions = {
@@ -1415,8 +1332,7 @@ const actions = {
     render();
   },
   add: (el) => {
-    const sensor = newSensor(el.dataset.type);
-    sensor.filters.players = selection().players.map((p) => p.id);
+    const sensor = newSensor(el.dataset.type, selection());
     state.config.sensors.push(sensor);
     state.editing = sensor.id;
     return changed();
@@ -1541,7 +1457,6 @@ const actions = {
   'toggle-filter-players': (el) => { toggle(editingSensor().filters.players, el.dataset.id); return changed(); },
   'toggle-filter-users': (el) => { toggle(editingSensor().filters.users, el.dataset.id); return changed(); },
   'toggle-filter-libraries': (el) => { toggle(editingSensor().filters.libraries, el.dataset.id); return changed(); },
-  'toggle-filter-mediaTypes': (el) => { toggle(editingSensor().filters.mediaTypes, el.dataset.id); return changed(); },
   reload: () => { location.reload(); },
   'bug-help': () => { state.bugHelp = !state.bugHelp; render(); },
   'open-webhooks': () => {
@@ -1577,9 +1492,11 @@ const actions = {
   })),
   'show-diagnostics': () => busy('Collecting diagnostics…', loadDiagnostics),
   'copy-diagnostics': async () => {
-    await busy('Collecting diagnostics…', loadDiagnostics);
-    if (state.report) {
-      await copy(state.report, 'Diagnostics copied.');
+    // Text already shown, and still for the same name setting, is copied inside the click.
+    const fresh = state.report && state.reportNames === (state.includeNames === true);
+    const copied = await copyText(fresh ? state.report : busy('Collecting diagnostics…', loadDiagnostics).then(() => state.report ?? ''), 'Diagnostics copied.');
+    if (!copied && state.report) {
+      homebridge.toast.info('The text is ready below. Press Copy again.', 'Diagnostics');
     }
   },
   'download-diagnostics': async () => {
@@ -1672,7 +1589,13 @@ root.addEventListener('change', (event) => {
   const field = el.dataset.field;
   if (sensor && field) {
     if (field === 'name') {
-      sensor.name = el.value.trim() || sensor.name;
+      const typed = el.value.trim();
+      if (typed) {
+        sensor.name = homeKitName(typed, sensor.type === 'button' ? 'Button' : 'Sensor');
+        if (sensor.name !== typed) {
+          homebridge.toast.info(`Saved as "${sensor.name}". Apple Home names start and end with a letter or number, without emoji or symbols.`, 'Name');
+        }
+      }
     } else if (field === 'state') {
       sensor.state = el.value;
       if (!CAN_EXCEPT.includes(sensor.state)) {

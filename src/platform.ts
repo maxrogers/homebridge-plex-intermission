@@ -4,110 +4,40 @@ import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { parseConfig, type IntermissionConfig, type SensorConfig } from './config.js';
-import { CommandRunner, type NamedCommand } from './commands.js';
-import { Controller, type ChangeContext, type SensorOutput } from './controller.js';
-import { DiagnosticLog, player as markPlayer, title as markTitle } from './diagnostics.js';
-import { systemClock } from './engine/clock.js';
+import { CommandRunner } from './commands.js';
+import { parseConfig, type IntermissionConfig } from './config.js';
+import { Controller } from './controller.js';
+import { DiagnosticLog } from './diagnostics.js';
+import { guardedClock, systemClock, type Clock } from './engine/clock.js';
 import type { Logger } from './engine/types.js';
+import { describe } from './errors.js';
 import { LibraryTypes } from './plex/library-types.js';
 import { MarkerCache } from './plex/marker-cache.js';
 import { NotificationStream } from './plex/notifications.js';
 import { PlexTv } from './plex/plex-tv.js';
 import { PlexHttpError, PlexServer } from './plex/server.js';
 import { WebhookServer } from './plex/webhook-server.js';
-import { SensorAccessory } from './sensors/sensor-accessory.js';
+import { maskAddress } from './network.js';
 import { configFingerprint } from './runtime.js';
+import { SensorAccessory } from './sensors/sensor-accessory.js';
+import { CommandHooks, SensorHub } from './sensors/sensor-hub.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import { serverToken, Storage } from './storage.js';
 
-/**
- * Several servers can drive the same sensor. A state sensor is on while any server says so;
- * presses pass straight through.
- */
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-class SensorHub {
-  /** Servers voting "on", or for "Nothing playing", servers voting "off" (busy). */
-  private readonly votes = new Set<number>();
-  private readonly allMustAgree: boolean;
-
-  constructor(
-    readonly accessory: SensorAccessory,
-    private readonly commands: CommandHooks,
-    private readonly log: Logger,
-  ) {
-    this.allMustAgree = accessory.config.state === 'idle';
-  }
-
-  output(voter: number): SensorOutput {
-    return {
-      config: this.accessory.config,
-      setActive: (active, context) => {
-        if (active !== this.allMustAgree) {
-          this.votes.add(voter);
-        } else {
-          this.votes.delete(voter);
-        }
-        const on = this.allMustAgree ? this.votes.size === 0 : this.votes.size > 0;
-        if (this.accessory.setActive(on)) {
-          const media = context?.session;
-          this.log.info('%s: %s%s', this.accessory.config.name, on ? 'on' : 'off',
-            media ? ` (${markTitle(media.media.title)}, ${markPlayer(media.playerTitle ?? media.playerId)})` : '');
-          this.commands.run(this.accessory.config, on ? 'on' : 'off', context);
-        }
-      },
-      press: (context) => {
-        this.accessory.press();
-        this.commands.run(this.accessory.config, 'press', context);
-      },
-    };
-  }
-}
-
-/** Runs a sensor's commands for a change, with what was playing. */
-class CommandHooks {
-  private readonly byId: Map<string, NamedCommand>;
-
-  constructor(
-    commands: readonly NamedCommand[],
-    private readonly runner: CommandRunner,
-  ) {
-    this.byId = new Map(commands.map((command) => [command.id, command]));
-  }
-
-  run(sensor: SensorConfig, change: 'on' | 'off' | 'press', context?: ChangeContext): void {
-    if (this.byId.size === 0) {
-      return;
-    }
-    const session = context?.session;
-    for (const id of sensor.run[change]) {
-      const command = this.byId.get(id);
-      if (command) {
-        void this.runner.run(command, {
-          sensor: sensor.name,
-          state: change === 'press' ? 'pressed' : change,
-          event: context?.event,
-          title: session?.media.title,
-          type: session?.media.type,
-          library: session?.media.librarySectionTitle,
-          player: session?.playerTitle ?? session?.playerId,
-          user: session?.user,
-        });
-      }
-    }
-  }
-}
+type WebhookFeed = EventEmitter<{ payload: [unknown] }>;
 
 export class IntermissionPlatform implements DynamicPlatformPlugin {
   private readonly accessories = new Map<string, PlatformAccessory>();
   private readonly log: Logger;
+  private readonly clock: Clock;
   private readonly settings: IntermissionConfig;
   private readonly controllers: Controller[] = [];
-  private webhooks?: WebhookServer;
-  private dailyTimer?: NodeJS.Timeout;
   private readonly fingerprint: string;
   private readonly diagnostics: DiagnosticLog;
+  private webhooks?: WebhookServer;
+  private dailyTimer?: NodeJS.Timeout;
 
   constructor(
     private readonly logging: Logging,
@@ -116,16 +46,20 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
   ) {
     this.diagnostics = new DiagnosticLog(join(this.api.user.storagePath(), 'intermission'));
     this.log = this.diagnostics.wrap(this.createLogger());
+    this.clock = guardedClock(systemClock, (error) => {
+      this.log.error('Unexpected error: %s', describe(error));
+      this.log.debug('%s', error instanceof Error ? error.stack : String(error));
+    });
     this.settings = parseConfig(config, this.log);
     this.fingerprint = configFingerprint(config);
     this.api.on('didFinishLaunching', () => {
-      this.start().catch((error: unknown) => this.log.error('Could not start: %s', error instanceof Error ? error.message : String(error)));
+      this.start().catch((error: unknown) => this.log.error('Could not start: %s', describe(error)));
     });
     this.api.on('shutdown', () => {
       clearInterval(this.dailyTimer);
       void this.diagnostics.flush();
       for (const controller of this.controllers) {
-        void controller.stop();
+        controller.stop();
       }
       void this.webhooks?.stop();
     });
@@ -138,7 +72,13 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
   private async start(): Promise<void> {
     // Sensors exist even before sign-in, so Home automations that use them keep working.
     const commands = new CommandHooks(this.settings.commands, new CommandRunner(this.log));
-    const hubs = this.syncAccessories().map((accessory) => new SensorHub(accessory, commands, this.log));
+    const accessories = this.syncAccessories();
+    const hubs = accessories.map((accessory) => new SensorHub(accessory, commands, this.log));
+    for (const accessory of accessories) {
+      const { config } = accessory;
+      this.log.debug('Sensor %s: %s%s, restored %s.', config.name, config.type === 'button' ? `button for ${config.events.join(', ')}` : `${config.type} ${config.state}`,
+        config.except.length ? ` except ${config.except.join(' and ')}` : '', config.type === 'button' ? '-' : accessory.isActive ? 'on' : 'off');
+    }
 
     const storage = new Storage(this.api.user.storagePath());
     const version = await readFile(new URL('../package.json', import.meta.url), 'utf8')
@@ -147,7 +87,8 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
       this.settings.sensors.length, this.settings.sensors.length === 1 ? '' : 's');
     // Lets the settings page show whether the saved settings are running or need a restart.
     await storage.writeRunning({ fingerprint: this.fingerprint, startedAt: new Date().toISOString() })
-      .catch((error: unknown) => this.log.debug('Could not record the running settings: %s', String(error)));
+      .catch((error: unknown) => this.log.debug('Could not record the running settings: %s', describe(error)));
+
     const credentials = await storage.readCredentials();
     const servers = this.settings.servers;
     if (!credentials?.setupId || servers.length === 0 || credentials.setupId !== this.settings.setupId) {
@@ -161,6 +102,7 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
     if (plexPass === 'unauthorized') {
       return;
     }
+    this.log.debug('Plex Pass: %s.', plexPass === undefined ? 'unknown (plex.tv unreachable)' : plexPass ? 'yes' : 'no');
     if (plexPass === false) {
       this.log.info('No Plex Pass: play is noticed at the first progress report, new media gets no credits markers, and webhook-only events are unavailable.');
     }
@@ -168,48 +110,51 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
       await storage.recordPlexPass(plexPass);
     }
 
-    const feed = new EventEmitter<{ payload: [unknown] }>();
+    const feed: WebhookFeed = new EventEmitter();
     if (this.settings.webhook.enabled && plexPass !== false) {
       await this.startWebhooks(state.webhookSecret, feed);
     }
 
+    for (const server of servers) {
+      this.log.debug('Server %s at %s.', server.name, maskAddress(server.url));
+    }
+    this.log.debug('Settings: %s.', describeSettings(this.settings));
     const plexServers = servers.map((server) => new PlexServer({ baseUrl: server.url, token: serverToken(credentials, server.id), clientIdentifier: state.clientIdentifier }));
     const libraryTypes = new LibraryTypes(servers.map((server, index) => ({ serverId: server.id, libraries: () => plexServers[index]!.libraries() })));
-    const hasCredits = (serverId: string) => (media: { type: string; librarySectionId?: string }) => libraryTypes.hasCredits(serverId, media);
-    const readLibraries = () => libraryTypes.refresh();
-    await readLibraries();
+    await libraryTypes.refresh();
 
     servers.forEach((server, index) => {
       const plex = plexServers[index]!;
-      const markers = new MarkerCache((ratingKey) => plex.markers(ratingKey), systemClock);
+      const markers = new MarkerCache((ratingKey) => plex.markers(ratingKey), this.clock);
       const controller = new Controller({
         config: this.settings,
         server,
         log: servers.length > 1 ? prefixed(this.log, server.name) : this.log,
-        clock: systemClock,
+        clock: this.clock,
         plex,
         stream: new NotificationStream({ url: plex.notificationsUrl(), log: this.log }),
         webhooks: feed,
         getMarkers: (ratingKey) => markers.get(ratingKey),
-        hasCredits: hasCredits(server.id),
+        hasCredits: (media) => libraryTypes.hasCredits(server.id, media),
         getFacts: (ratingKey) => plex.facts(ratingKey),
         sensors: hubs.map((hub) => hub.output(index)),
       });
       this.controllers.push(controller);
-      void controller.start();
+      controller.start();
     });
     this.log.info('Watching %s with %d sensor%s.', servers.map((s) => s.name).join(' and '), hubs.length, hubs.length === 1 ? '' : 's');
 
     // Once a day: Plex Pass status and the library list.
     this.dailyTimer = setInterval(() => {
-      void readLibraries();
-      void this.dailyPlexPassCheck(plexTv, credentials.accountToken, storage, state.webhookSecret, feed);
+      void libraryTypes.refresh();
+      this.dailyPlexPassCheck(plexTv, credentials.accountToken, storage, state.webhookSecret, feed)
+        .catch((error: unknown) => this.log.warn('Daily Plex Pass check failed: %s', describe(error)));
     }, DAY_MS);
     this.dailyTimer.unref();
   }
 
   /** Notices Plex Pass ending or starting, adjusts webhooks, and leaves a notice for the settings page. */
-  private async dailyPlexPassCheck(plexTv: PlexTv, token: string, storage: Storage, secret: string, feed: EventEmitter<{ payload: [unknown] }>): Promise<void> {
+  private async dailyPlexPassCheck(plexTv: PlexTv, token: string, storage: Storage, secret: string, feed: WebhookFeed): Promise<void> {
     const active = await this.checkPlexPass(plexTv, token);
     if (active === undefined || active === 'unauthorized') {
       return;
@@ -229,7 +174,7 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
     }
   }
 
-  private async startWebhooks(secret: string, feed: EventEmitter<{ payload: [unknown] }>): Promise<void> {
+  private async startWebhooks(secret: string, feed: WebhookFeed): Promise<void> {
     const webhooks = new WebhookServer({ port: this.settings.webhook.port, secret, log: this.log });
     webhooks.on('payload', (payload) => feed.emit('payload', payload));
     try {
@@ -240,11 +185,11 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
       const code = (error as NodeJS.ErrnoException).code;
       this.log.error(code === 'EADDRINUSE'
         ? 'Cannot receive Plex webhooks: port %d is in use. Choose another port in the plugin settings.'
-        : 'Cannot receive Plex webhooks on port %d: %s', this.settings.webhook.port, (error as Error).message);
+        : 'Cannot receive Plex webhooks on port %d: %s', this.settings.webhook.port, describe(error));
     }
   }
 
-  /** Returns Plex Pass status, or undefined when plex.tv cannot be reached (assume the best). */
+  /** Plex Pass status, or undefined when plex.tv can't be reached (then nothing changes). */
   private async checkPlexPass(plexTv: PlexTv, token: string): Promise<boolean | undefined | 'unauthorized'> {
     try {
       return (await plexTv.user(token)).plexPass;
@@ -253,7 +198,7 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
         this.log.error('Plex no longer accepts the saved sign-in. Open the plugin settings and sign in again.');
         return 'unauthorized';
       }
-      this.log.warn('Cannot reach plex.tv to check Plex Pass: %s', error instanceof Error ? error.message : String(error));
+      this.log.warn('Cannot reach plex.tv to check Plex Pass: %s', describe(error));
       return undefined;
     }
   }
@@ -297,7 +242,7 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
     return sensors;
   }
 
-  /** Detailed logging shows debug messages at info level, without needing Homebridge debug mode. */
+  /** Detailed logging shows debug messages at info level, without Homebridge's debug mode. */
   private createLogger(): Logger {
     const logging = this.logging;
     // Read at call time: parseConfig logs through this logger before the settings exist.
@@ -309,6 +254,22 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
       error: (message, ...parameters) => logging.error(message, ...parameters),
     };
   }
+}
+
+/** The settings that differ from the defaults, for the start-up log. */
+function describeSettings(settings: IntermissionConfig): string {
+  const engine = settings.engine;
+  const parts = [
+    `credits ${engine.creditsMode}`,
+    engine.fallbackPercent === null ? 'no credits fallback' : `fallback ${engine.fallbackPercent}%`,
+    `pause debounce ${engine.pauseDebounceMs / 1000}s`,
+    `stop hold ${engine.stopHoldMs / 1000}s`,
+    engine.creditsOffsetMs ? `credits offset ${engine.creditsOffsetMs / 1000}s` : '',
+    engine.minItemLengthMs ? `minimum item ${engine.minItemLengthMs / 60_000} min` : '',
+    settings.webhook.enabled ? `webhooks on port ${settings.webhook.port}${settings.webhook.advertisedUrl ? ' with a manual address' : ''}` : 'webhooks off',
+    settings.commands.length ? `${settings.commands.length} command${settings.commands.length === 1 ? '' : 's'}` : '',
+  ];
+  return parts.filter(Boolean).join(', ');
 }
 
 function prefixed(log: Logger, name: string): Logger {

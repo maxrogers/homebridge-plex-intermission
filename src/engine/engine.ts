@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 
 import { player as markPlayer, title as markTitle } from '../diagnostics.js';
+import { describe } from '../errors.js';
 import type { Clock, TimerHandle } from './clock.js';
 import { CREDITED_TYPES, creditsRanges, type CreditsRange } from './credits.js';
 import type {
@@ -486,13 +487,8 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
   }
 
   /**
-   * Arms the credits timer from the current position. Called on every new position and state,
-   * so seeks and skips move the timer the moment Plex reports them.
-   */
-  /**
-   * Keeps `inCredits` in step with the position and sets a timer for the next credits boundary.
-   * Small rewinds (Plex rewinds a little on resume) never change the credits state: a rewind that
-   * lands within the re-arm distance of the credits it left keeps it.
+   * Re-times the credits and intro from the current position. Called on every new position and
+   * state, so seeks and skips move the timers the moment Plex reports them.
    */
   private scheduleMarkers(player: PlayerRecord): void {
     this.scheduleCredits(player);
@@ -529,6 +525,11 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
     }
   }
 
+  /**
+   * Keeps `inCredits` in step with the position and sets a timer for the next credits boundary.
+   * Small rewinds (Plex rewinds a little on resume) never change the credits state: a rewind that
+   * lands within the re-arm distance of the credits it left keeps it.
+   */
   private scheduleCredits(player: PlayerRecord): void {
     this.clearCreditsTimer(player);
     const ranges = player.credits;
@@ -626,8 +627,4 @@ function formatTime(ms: number): string {
   const m = Math.floor((total % 3600) / 60);
   const s = total % 60;
   return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

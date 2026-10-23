@@ -110,6 +110,26 @@ test('webhook server accepts only POSTs to its secret path', async () => {
   }
 });
 
+test('webhook server logs an error from a handler instead of crashing', async () => {
+  const errors = [];
+  const server = new WebhookServer({ port: 0, host: '127.0.0.1', secret: 'key', log: { ...silentLog, error: (...a) => errors.push(a) } });
+  await server.start();
+  server.on('payload', () => {
+    throw new Error('boom');
+  });
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.port}/key`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"event":"media.play"}' });
+    assert.equal(response.status, 200);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(errors.length, 1);
+    assert.match(String(errors[0][1]), /boom/);
+    assert.equal((await fetch(`http://127.0.0.1:${server.port}/key-longer`)).status, 404, 'a longer path is not the key');
+    assert.equal((await fetch(`http://127.0.0.1:${server.port}/ke`)).status, 404, 'a shorter path is not the key');
+  } finally {
+    await server.stop();
+  }
+});
+
 test('webhook server reports a port that is already in use', async () => {
   const first = new WebhookServer({ port: 0, host: '127.0.0.1', secret: 'a', log: silentLog });
   await first.start();
@@ -171,10 +191,58 @@ test('server client sends the token as a header and maps sessions and markers', 
   }
 });
 
+test('notification stream keeps retrying until Plex is reachable, then connects', async () => {
+  const { createServer } = await import('node:http');
+  const { createHash } = await import('node:crypto');
+  // Find a free port, then leave it closed for a while, as when Plex starts after Homebridge.
+  const probe = createServer();
+  await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const { port } = probe.address();
+  await new Promise((resolve) => probe.close(resolve));
+
+  const debug = [];
+  const stream = new NotificationStream({ url: `ws://127.0.0.1:${port}/:/websockets/notifications?X-Plex-Token=secret-token`,
+    log: { ...silentLog, debug: (...a) => debug.push(a) }, minBackoffMs: 20, maxBackoffMs: 40 });
+  const connected = new Promise((resolve) => stream.once('connected', resolve));
+  stream.start();
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.ok(debug.filter(([m, state]) => m.startsWith('Plex notifications:') && state === 'cannot connect').length >= 2, 'failed attempts are retried and logged');
+
+  // A minimal websocket server: accepts the handshake, then sends one playing notification.
+  const server = createServer();
+  const upgraded = [];
+  server.on('upgrade', (request, socket) => {
+    upgraded.push(socket);
+    const accept = createHash('sha1').update(`${request.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    const body = Buffer.from(JSON.stringify({ NotificationContainer: { type: 'playing', PlaySessionStateNotification: [
+      { sessionKey: '1', clientIdentifier: 'ATV', ratingKey: '9', state: 'playing', viewOffset: 1000 }] } }));
+    socket.write(Buffer.concat([Buffer.from([0x81, 126, body.length >> 8, body.length & 255]), body]));
+  });
+  await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
+  const playing = new Promise((resolve) => stream.once('playing', resolve));
+  try {
+    await connected;
+    assert.equal(stream.isConnected, true);
+    assert.equal((await playing).ratingKey, '9');
+    assert.ok(debug.every((args) => !args.join(' ').includes('secret-token')), 'the token is never logged');
+  } finally {
+    stream.stop();
+    // This mock never answers the close frame, so its upgraded sockets are ended here; Plex answers it.
+    for (const socket of upgraded) {
+      socket.destroy();
+    }
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('notification stream stops cleanly while it cannot connect', async () => {
-  const stream = new NotificationStream({ url: 'ws://127.0.0.1:9/', log: silentLog, minBackoffMs: 10, maxBackoffMs: 20 });
+  const debug = [];
+  const stream = new NotificationStream({ url: 'ws://127.0.0.1:9/', log: { ...silentLog, debug: (...a) => debug.push(a) }, minBackoffMs: 10, maxBackoffMs: 20 });
   stream.start();
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.equal(stream.isConnected, false);
   stream.stop();
+  assert.ok(debug.some(([message, state]) => message.startsWith('Plex notifications:') && state === 'cannot connect'), 'each failed attempt is logged with its reason');
+  assert.ok(debug.every((args) => !args.join(' ').includes('X-Plex-Token')), 'the address with its token is never logged');
 });

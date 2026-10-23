@@ -35,8 +35,8 @@ await writeFile(join(storage, 'config.json'), JSON.stringify({
     webhook: { enabled: true, port: WEBHOOK_PORT },
     commands: { enabled: true, list: [{ id: 'log', name: 'Log', command: `echo {sensor} {state} {title} >> ${new URL('./commands.log', import.meta.url).pathname}` }] },
     sensors: [
-      { id: 's-play', name: 'Media Playing', type: 'occupancy', state: 'playing', filters },
-      { id: 's-pause', name: 'Media Paused', type: 'occupancy', state: 'paused', filters },
+      { id: 's-play', name: 'Media Playing', type: 'occupancy', state: 'playing', except: ['credits'], filters },
+      { id: 's-pause', name: 'Media Paused', type: 'occupancy', state: 'paused', except: ['credits'], filters },
       { id: 's-credits', name: 'Credits Rolling', type: 'occupancy', state: 'credits', filters, run: { on: ['log'], off: ['log'] } },
       { id: 's-intro', name: 'Intro Playing', type: 'occupancy', state: 'intro', filters, run: { on: ['log'], off: ['log'] } },
       { id: 's-idle', name: 'Nothing Playing', type: 'occupancy', state: 'idle', filters },

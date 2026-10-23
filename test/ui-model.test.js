@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { parseConfig } from '../dist/config.js';
 import {
-  availableMediaTypes, defaultSelection, needsPlexPass, PRESETS, presetSensors, presetsInUse, newSensor, setTiming, summarize, TIMING_FIELDS, timingValue,
+  defaultSelection, needsPlexPass, PRESETS, presetSensors, presetsInUse, newSensor, setTiming, summarize, TIMING_FIELDS, timingValue,
 } from '../homebridge-ui/public/model.js';
 import { silentLog } from './helpers.js';
 
@@ -44,11 +44,11 @@ test('Every State produces sensors the plugin accepts', () => {
   assert.deepEqual(config.sensors.map((s) => s.name), ['Media Playing', 'Media Paused', 'Credits Rolling', 'Nothing Playing']);
   assert.deepEqual(config.sensors.map((s) => `${s.type}:${s.state}:${s.except.join()}`), ['occupancy:playing:credits', 'occupancy:paused:credits', 'occupancy:credits:', 'occupancy:idle:'], 'all state sensors');
   assert.equal(new Set(config.sensors.map((s) => s.id)).size, 4);
-  assert.deepEqual(config.sensors[0].filters, { players: ['ATV'], users: [], libraries: ['a/1', 'a/2', 'b/1'], mediaTypes: [] });
+  assert.deepEqual(config.sensors[0].filters, { players: ['ATV'], users: [], libraries: ['a/1', 'a/2', 'b/1'] });
   const some = presetSensors('states', { ...defaultSelection(discovery), allUsers: false, users: ['Steve'] });
   assert.deepEqual(some[0].filters.users, ['Steve']);
   const everything = presetSensors('states', { ...defaultSelection(discovery), allPlayers: true, allLibraries: true });
-  assert.deepEqual(everything[0].filters, { players: [], users: [], libraries: [], mediaTypes: [] }, 'All means no filter');
+  assert.deepEqual(everything[0].filters, { players: [], users: [], libraries: [] }, 'All means no filter');
 });
 
 test('new sensors are valid', () => {
@@ -62,19 +62,20 @@ test('summaries read as a sentence', () => {
   const selection = defaultSelection(discovery);
   const [playing, , credits] = presetSensors('states', selection);
   assert.equal(summarize(playing, selection), 'On while playing, except during the credits, on Living Room, for Movies, TV Shows or 1 more, by anyone.');
-  assert.equal(summarize({ ...credits, filters: { players: [], users: ['steve'], libraries: [], mediaTypes: ['movie'] } }, selection),
-    'On while in the credits, on any player, for Movies and other videos, by steve.');
-  assert.equal(summarize({ type: 'button', events: ['credits.start'], filters: { players: [], users: [], libraries: [], mediaTypes: [] } }, selection),
+  assert.equal(summarize({ ...credits, filters: { players: [], users: ['steve'], libraries: [] } }, selection),
+    'On while in the credits, on any player, for anything, by steve.');
+  assert.equal(summarize({ type: 'button', events: ['credits.start'], filters: { players: [], users: [], libraries: [] } }, selection),
     'Pressed when the credits start, on any player, for anything, by anyone.');
   assert.equal(needsPlexPass({ type: 'button', events: ['library.new'] }), true);
   assert.equal(needsPlexPass({ type: 'button', events: ['library.new', 'play'] }), false);
 });
 
-test('media types follow the chosen libraries', () => {
-  const libraries = discovery.servers[0].libraries;
-  assert.deepEqual(availableMediaTypes(libraries.slice(0, 2)), ['movie', 'episode']);
-  assert.deepEqual(availableMediaTypes(libraries), ['movie', 'episode', 'track']);
-  assert.deepEqual(availableMediaTypes([{ kind: 'photo' }]), ['photo', 'clip']);
+test('new sensors start from the setup choices', () => {
+  const selection = defaultSelection(discovery);
+  const sensor = newSensor('occupancy', selection);
+  assert.deepEqual(sensor.filters, { players: selection.players.map((p) => p.id), users: [], libraries: selection.libraries.map((l) => l.key) });
+  assert.deepEqual(newSensor('button', { ...selection, allPlayers: true, allLibraries: true }).filters, { players: [], users: [], libraries: [] });
+  assert.deepEqual(newSensor('occupancy').filters, { players: [], users: [], libraries: [] }, 'no selection: everything');
 });
 
 test('advanced fields round-trip through the config ranges', () => {
@@ -90,6 +91,8 @@ test('advanced fields round-trip through the config ranges', () => {
   assert.equal(setTiming({}, field('pauseDebounce'), 0.7).pauseDebounce, 0.5);
   assert.equal(setTiming({}, field('pauseDebounce'), 1.3).pauseDebounce, undefined, '1.3 rounds to the default');
   assert.equal(setTiming({}, field('stopHold'), 12.4).stopHold, 12, 'whole seconds');
+  assert.equal(setTiming({ stopHold: 20 }, field('stopHold'), '').stopHold, undefined, 'a cleared field goes back to the default, not 0');
+  assert.equal(setTiming({}, field('safetyResync'), '0').safetyResync, 0, 'a typed 0 is kept');
   assert.equal(parseConfig({ timing: { pauseDebounce: 0.5 } }, silentLog).engine.pauseDebounceMs, 500);
   const config = parseConfig({ timing }, silentLog);
   assert.equal(config.engine.minItemLengthMs, 300_000);
@@ -156,8 +159,8 @@ test('adding a preset alongside or in place of existing sensors', async () => {
   const { applyPreset, groupIntact } = await import('../homebridge-ui/public/model.js');
   const selection = { allPlayers: true, players: [], allUsers: true, users: [], allLibraries: true, libraries: [] };
   const mine = [
-    { id: 's-mine', name: 'Media Playing', type: 'occupancy', state: 'playing', except: [], filters: { players: ['ATV'], users: [], libraries: [], mediaTypes: [] }, run: { on: ['c-1'], off: [], press: [] } },
-    { id: 's-other', name: 'Projector', type: 'occupancy', state: 'playing', except: [], filters: { players: [], users: [], libraries: [], mediaTypes: [] } },
+    { id: 's-mine', name: 'Media Playing', type: 'occupancy', state: 'playing', except: [], filters: { players: ['ATV'], users: [], libraries: [] }, run: { on: ['c-1'], off: [], press: [] } },
+    { id: 's-other', name: 'Projector', type: 'occupancy', state: 'playing', except: [], filters: { players: [], users: [], libraries: [] } },
   ];
 
   const along = applyPreset(mine, 'states', selection, 'alongside');
@@ -186,7 +189,7 @@ test('adding a preset alongside or in place of existing sensors', async () => {
 
 test('media conditions read as part of the summary', async () => {
   const { summarize, describeFacts } = await import('../homebridge-ui/public/model.js');
-  const sensor = { name: 'Wide', type: 'occupancy', state: 'playing', except: [], filters: { players: [], users: [], libraries: [], mediaTypes: [] }, media: { shape: 'wide', ratings: ['G', 'PG'] } };
+  const sensor = { name: 'Wide', type: 'occupancy', state: 'playing', except: [], filters: { players: [], users: [], libraries: [] }, media: { shape: 'wide', ratings: ['G', 'PG'] } };
   assert.equal(summarize(sensor), 'On while playing, on any player, for anything with a wide picture, rated G or PG, by anyone.');
   assert.deepEqual(describeFacts({ aspectRatio: 2.39, resolution: '4k', dynamicRange: 'dv', contentRating: 'PG-13', labels: ['Kids'] }),
     { shape: 'Wide 2.39:1', shapeValue: 'wide', resolution: '4K', dynamicRange: 'Dolby Vision', rating: 'PG-13', labels: ['Kids'] });

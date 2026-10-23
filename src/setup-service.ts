@@ -8,7 +8,8 @@ import { discover, type Discovery } from './plex/discovery.js';
 import { connectionCandidates, type PlexPin, PlexTv } from './plex/plex-tv.js';
 import { PlexHttpError, PlexServer, type PlexServerPrefs } from './plex/server.js';
 import { bridgePairing, type BridgePairing } from './child-bridge.js';
-import { commandLine, person, player, readDiagnostics, redact, scrubSecrets, unmark } from './diagnostics.js';
+import { describe } from './errors.js';
+import { lanAddress } from './network.js';
 import type { MediaFacts } from './plex/media-facts.js';
 import { configFingerprint } from './runtime.js';
 import { serverToken, type Credentials, type Storage } from './storage.js';
@@ -61,6 +62,8 @@ export interface ReportInput {
   servers: ServerRef[];
   homebridgeVersion?: string;
   nodeVersion?: string;
+  /** The browser's time zone, for example "America/Denver (UTC-06:00)", since log times are in UTC. */
+  timeZone?: string;
 }
 
 export interface SetupServiceOptions {
@@ -76,6 +79,10 @@ export class SetupService {
   private pending?: { pin: PlexPin; startedAt: number };
 
   constructor(private readonly options: SetupServiceOptions) {}
+
+  get storage(): Storage {
+    return this.options.storage;
+  }
 
   private now(): number {
     return this.options.now?.() ?? Date.now();
@@ -94,7 +101,8 @@ export class SetupService {
     return credentials;
   }
 
-  private async plexServer(ref: ServerRef, credentials: Credentials): Promise<PlexServer> {
+  /** A client for one of the chosen servers, with its token. */
+  async serverFor(ref: ServerRef, credentials: Credentials): Promise<PlexServer> {
     const { clientIdentifier } = await this.options.storage.state();
     return new PlexServer({ baseUrl: ref.url, token: serverToken(credentials, ref.id), clientIdentifier });
   }
@@ -186,7 +194,7 @@ export class SetupService {
   }[]> {
     const credentials = await this.credentials();
     const lists = await Promise.all(servers.map(async (ref) => {
-      const plex = await this.plexServer(ref, credentials);
+      const plex = await this.serverFor(ref, credentials);
       const sessions = await plex.sessions().catch(() => []);
       return Promise.all(sessions.map(async (session) => ({
         server: ref.name,
@@ -203,7 +211,7 @@ export class SetupService {
   }
 
   /** Pairing details of Intermission's own child bridge, by its `_bridge.username`. */
-  bridgePairing(username: string): Promise<BridgePairing> {
+  async bridgePairing(username: string): Promise<BridgePairing> {
     if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i.test(username)) {
       throw new SetupError('Not a child bridge ID.');
     }
@@ -284,7 +292,7 @@ export class SetupService {
       throw new SetupError('Choose a server first.');
     }
     const credentials = await this.credentials();
-    const targets = await Promise.all(servers.map(async (ref) => ({ id: ref.id, name: ref.name, server: await this.plexServer(ref, credentials) })));
+    const targets = await Promise.all(servers.map(async (ref) => ({ id: ref.id, name: ref.name, server: await this.serverFor(ref, credentials) })));
     return discover(targets, await this.plexTv(), credentials.accountToken);
   }
 
@@ -308,7 +316,7 @@ export class SetupService {
     const [portState, serverSettings] = await Promise.all([
       this.portState(port, webhookSecret),
       Promise.all(options.servers.map(async (ref) => {
-        const prefs = await (await this.plexServer(ref, credentials)).prefs().catch((): PlexServerPrefs => ({}));
+        const prefs = await (await this.serverFor(ref, credentials)).prefs().catch((): PlexServerPrefs => ({}));
         return { name: ref.name, enabled: prefs.webhooksEnabled };
       })),
     ]);
@@ -343,7 +351,7 @@ export class SetupService {
       throw new SetupError('Webhooks need Plex Pass on this account.');
     }
     if (change.add && !before.url) {
-      throw new SetupError('Could not work out this Homebridge\'s network address. Set it under Advanced.');
+      throw new SetupError('Could not work out this Homebridge\'s network address. Set it in Settings, Webhook options.');
     }
     const remove = new Set(change.remove ?? []);
     const keep = before.others.filter((url) => !remove.has(url));
@@ -355,7 +363,7 @@ export class SetupService {
     }
     if (change.add) {
       await Promise.all(options.servers.filter((s) => before.disabledOn.includes(s.name))
-        .map(async (ref) => (await this.plexServer(ref, credentials)).setPref('WebHooksEnabled', true)));
+        .map(async (ref) => (await this.serverFor(ref, credentials)).setPref('WebHooksEnabled', true)));
     }
     const after = await this.webhookStatus(options);
     if (keep.some((url) => !after.others.includes(url))) {
@@ -364,10 +372,6 @@ export class SetupService {
       return this.webhookStatus(options);
     }
     return after;
-  }
-
-  addWebhook(options: WebhookOptions): Promise<WebhookStatus> {
-    return this.updateWebhooks(options, { add: true });
   }
 
   async removeWebhook(options: WebhookOptions): Promise<WebhookStatus> {
@@ -409,143 +413,7 @@ export class SetupService {
       funding: clean(typeof pkg.funding === 'string' ? pkg.funding : pkg.funding?.url),
     };
   }
-
-  /** A plain-text summary for the Advanced page and bug reports. Contains no tokens or webhook secret. */
-  async report(input: ReportInput): Promise<string> {
-    return unmark(await this.setupReport(input));
-  }
-
-  /**
-   * Everything needed to look into a problem, as one text file: the setup report, every sensor,
-   * and the recent detailed log the plugin keeps. Never contains the Plex sign-in, server tokens or
-   * the webhook key; public addresses are hidden; titles, people, players and command lines are
-   * replaced with placeholders unless `includeNames` is set.
-   */
-  async diagnostics(input: ReportInput & { includeNames?: boolean }): Promise<string> {
-    const config = input.config;
-    const selection = (config.selection ?? {}) as { players?: { id: string; name?: string }[]; libraries?: { key: string; title?: string }[] };
-    const playerNames = new Map((selection.players ?? []).map((p) => [p.id, p.name ?? p.id]));
-    const libraryNames = new Map((selection.libraries ?? []).map((l) => [l.key, l.title ?? l.key]));
-    const commands = new Map(((config.commands as { list?: { id: string; name?: string; command?: string }[] } | undefined)?.list ?? []).map((c) => [c.id, c]));
-    const list = (values: unknown, name: (v: string) => string, all: string) => {
-      const items = Array.isArray(values) ? values.map(String) : [];
-      return items.length === 0 ? all : items.map(name).join(', ');
-    };
-
-    const lines = [
-      'Intermission diagnostics',
-      `Created ${new Date(this.now()).toISOString()}. ${input.includeNames ? 'Titles and names are included.' : 'Titles, people, players and command lines are replaced with placeholders.'}`,
-      'Never includes your Plex sign-in, server tokens or webhook key. Public addresses are hidden.',
-      '', '== Setup ==', await this.setupReport(input),
-      '', '== Sensors ==',
-    ];
-    const sensors = Array.isArray(config.sensors) ? config.sensors as Record<string, unknown>[] : [];
-    for (const sensor of sensors) {
-      const f = (sensor.filters ?? {}) as Record<string, unknown>;
-      const run = (sensor.run ?? {}) as Record<string, string[]>;
-      const ran = ['on', 'off', 'press'].flatMap((key) => (run[key]?.length ? [`${key}: ${run[key].map((id) => commands.get(id)?.name ?? id).join(', ')}`] : []));
-      lines.push(`${String(sensor.name)} [${String(sensor.type)}${sensor.group ? `, ${String(sensor.group).split(':')[0]} preset` : ''}]`);
-      lines.push(sensor.type === 'button'
-        ? `  pressed on: ${list(sensor.events, (e) => e, 'nothing')}`
-        : `  on while: ${String(sensor.state)}${Array.isArray(sensor.except) && sensor.except.length ? `, except ${sensor.except.join(' and ')}` : ''}`);
-      lines.push(`  players: ${list(f.players, (id) => player(playerNames.get(id) ?? id), 'all')}`);
-      lines.push(`  people: ${list(f.users, (u) => person(u), 'all')}`);
-      lines.push(`  libraries: ${list(f.libraries, (k) => `${libraryNames.get(k) ?? k}`, 'all')}`);
-      if (Array.isArray(f.mediaTypes) && f.mediaTypes.length) {
-        lines.push(`  media types: ${f.mediaTypes.join(', ')}`);
-      }
-      if (sensor.media && Object.keys(sensor.media).length) {
-        lines.push(`  media conditions: ${JSON.stringify(sensor.media)}`);
-      }
-      if (ran.length) {
-        lines.push(`  commands: ${ran.join('; ')}`);
-      }
-    }
-    if (commands.size > 0) {
-      lines.push('', `== Commands (${(config.commands as { enabled?: boolean }).enabled ? 'on' : 'off'}) ==`);
-      for (const command of commands.values()) {
-        lines.push(`${command.name ?? '?'}: ${commandLine(command.command ?? '')}`);
-      }
-    }
-    const log = await readDiagnostics(this.options.storage.directory);
-    lines.push('', `== Recent log (${log.length} lines, oldest first, detailed) ==`, ...(log.length ? log : ['Nothing logged yet. Restart Homebridge once, so Intermission starts keeping its log.']));
-
-    const credentials = await this.options.storage.readCredentials();
-    const { webhookSecret } = await this.options.storage.state();
-    const secrets = [webhookSecret, credentials?.accountToken, credentials?.serverToken, ...Object.values(credentials?.serverTokens ?? {})].filter((s): s is string => Boolean(s));
-    return hidePublicAddresses(scrubSecrets(redact(lines.join('\n'), input.includeNames === true), secrets));
-  }
-
-  private async setupReport(input: ReportInput): Promise<string> {
-    const lines: string[] = [];
-    const version = await readFile(new URL('../package.json', import.meta.url), 'utf8')
-      .then((text) => (JSON.parse(text) as { version?: string }).version ?? '?', () => '?');
-    lines.push(`Intermission ${version}`, `Homebridge UI ${input.homebridgeVersion ?? '?'}, Node.js ${input.nodeVersion ?? '?'}`, '');
-
-    const credentials = await this.options.storage.readCredentials();
-    const status = await this.status(typeof input.config.setupId === 'string' ? input.config.setupId : undefined);
-    lines.push(`Plex account: ${status.signedIn ? (status.username ? person(status.username) : 'signed in') : 'not signed in'}`);
-    lines.push(`Plex Pass: ${status.plexPass === undefined ? 'unknown' : status.plexPass ? 'yes' : 'no'}`);
-
-    for (const ref of input.servers) {
-      lines.push('', `Server: ${ref.name} (${maskAddress(ref.url)})`);
-      if (!credentials) {
-        continue;
-      }
-      const server = await this.plexServer(ref, credentials);
-      const [identity, prefs, libraries] = await Promise.all([
-        server.identity().catch(() => undefined),
-        server.prefs().catch(() => undefined),
-        server.libraries().catch(() => undefined),
-      ]);
-      lines.push(`  Version: ${identity?.version || 'unreachable'}`);
-      if (prefs) {
-        lines.push(`  Credits detection: ${CREDITS_DETECTION[prefs.creditsDetection ?? ''] ?? prefs.creditsDetection ?? 'unknown'}`);
-        lines.push(`  Webhooks setting: ${prefs.webhooksEnabled === undefined ? 'unknown' : prefs.webhooksEnabled ? 'on' : 'off'}`);
-        if (prefs.playedThreshold !== undefined) {
-          lines.push(`  Marked watched at: ${prefs.playedThreshold}%`);
-        }
-      } else {
-        lines.push('  Server settings: not readable with this sign-in');
-      }
-      for (const library of libraries ?? []) {
-        lines.push(`  Library ${library.id}: ${library.title} (${library.type}${library.agent ? `, ${library.agent}` : ''})`);
-      }
-    }
-
-    if (status.signedIn && status.plexPass) {
-      const webhook = await this.webhookStatus({ ...webhookOptionsFrom(input.config), servers: input.servers }).catch(() => undefined);
-      lines.push('', `Webhook: ${webhook ? (webhook.registered ? 'registered' : 'not registered') : 'unknown'}${webhook?.stale.length ? ' (an old address is also registered)' : ''}`);
-      lines.push(`Other webhooks on the account: ${webhook?.others.length ?? '?'}`);
-      if (webhook) {
-        lines.push(`Webhook port ${webhook.port}: ${PORT_STATES[webhook.portState]}`);
-      }
-    }
-
-    const sensors = Array.isArray(input.config.sensors) ? input.config.sensors as { name?: string; type?: string; state?: string; events?: string[] }[] : [];
-    lines.push('', `Sensors: ${sensors.length}`);
-    for (const sensor of sensors) {
-      lines.push(`  ${sensor.name ?? '?'}: ${sensor.type ?? '?'} ${sensor.state ?? (sensor.events ?? []).join(', ')}`);
-    }
-    const bridge = (input.config._bridge ?? undefined) as { username?: string; port?: number } | undefined;
-    lines.push('', `Bridge: ${bridge?.username ? `own child bridge (port ${bridge.port ?? 'automatic'})` : 'main Homebridge bridge'}`);
-    lines.push(`Settings: ${JSON.stringify({ timing: input.config.timing ?? {}, webhook: { ...(input.config.webhook as object ?? {}) }, detailedLogging: input.config.detailedLogging ?? false })}`);
-    return lines.join('\n');
-  }
 }
-
-const PORT_STATES: Record<PortState, string> = {
-  intermission: 'Intermission is listening',
-  free: 'nothing listening (restart Homebridge after saving)',
-  other: 'used by another app',
-  unknown: 'could not check',
-};
-
-const CREDITS_DETECTION: Record<string, string> = {
-  '0': 'never',
-  '1': 'as a scheduled task',
-  '2': 'as a scheduled task and when media is added',
-};
 
 export function webhookOptionsFrom(config: Record<string, unknown>): Omit<WebhookOptions, 'servers'> {
   const webhook = (config.webhook && typeof config.webhook === 'object' ? config.webhook : {}) as { port?: unknown; advertisedUrl?: unknown };
@@ -563,73 +431,3 @@ function pathOf(url: string): string | undefined {
   }
 }
 
-const PRIVATE = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|169\.254\.|0\.)/;
-
-/** Replaces public IPv4 addresses anywhere in a text; private ones stay, since they help diagnosis. */
-export function hidePublicAddresses(text: string): string {
-  return text
-    .replace(/\b(\d{1,3})-(\d{1,3})-(\d{1,3})-(\d{1,3})\.([0-9a-f]{32})\.plex\.direct/gi, (match, a, b, c, d) =>
-      (PRIVATE.test(`${a}.${b}.${c}.${d}`) ? match : 'remote-address.plex.direct'))
-    .replace(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g, (ip) => (PRIVATE.test(ip) || ip.split('.').some((p) => Number(p) > 255) ? ip : 'x.x.x.x'));
-}
-
-/** Shows private addresses, which help diagnosis, and hides public ones before a report is shared. */
-function maskAddress(url: string): string {
-  const address = serverAddress(url);
-  if (address && PRIVATE.test(address)) {
-    return `${new URL(url).protocol}//${address}:${new URL(url).port || '32400'}`;
-  }
-  return 'remote address';
-}
-
-const IGNORED_INTERFACES = /^(docker|veth|virbr|br-|vnet|tun|tap|utun|lo|zt|tailscale|wg)/;
-
-function toNumber(ip: string): number {
-  return ip.split('.').reduce((total, part) => total * 256 + Number(part), 0) >>> 0;
-}
-
-/** Extracts an IPv4 address from a server URL, including Plex's `10-0-0-2.<id>.plex.direct` names. */
-export function serverAddress(url: string): string | undefined {
-  try {
-    const host = new URL(url).hostname;
-    if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
-      return host;
-    }
-    const direct = /^(\d+)-(\d+)-(\d+)-(\d+)\./.exec(host);
-    return direct ? direct.slice(1, 5).join('.') : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Picks this machine's IPv4 address for Plex to call: one on the same subnet as a server when
- * possible, otherwise the first ordinary network interface.
- */
-export function lanAddress(interfaces: NodeJS.Dict<NetworkInterfaceInfo[]>, serverUrls: readonly string[]): string | undefined {
-  const candidates = Object.entries(interfaces)
-    .filter(([name]) => !IGNORED_INTERFACES.test(name))
-    .flatMap(([, entries]) => entries ?? [])
-    .filter((entry) => entry.family === 'IPv4' && !entry.internal);
-  for (const url of serverUrls) {
-    const target = serverAddress(url);
-    if (!target) {
-      continue;
-    }
-    if (candidates.some((entry) => entry.address === target)) {
-      return target;
-    }
-    const match = candidates.find((entry) => {
-      const mask = toNumber(entry.netmask);
-      return (toNumber(entry.address) & mask) === (toNumber(target) & mask);
-    });
-    if (match) {
-      return match.address;
-    }
-  }
-  return candidates[0]?.address;
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}

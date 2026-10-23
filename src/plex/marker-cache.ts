@@ -37,13 +37,4 @@ export class MarkerCache {
     }
     return request;
   }
-
-  /** Forgets an item, for example after `library.new` reports it changed. */
-  invalidate(ratingKey: string): void {
-    this.entries.delete(ratingKey);
-  }
-
-  clear(): void {
-    this.entries.clear();
-  }
 }
