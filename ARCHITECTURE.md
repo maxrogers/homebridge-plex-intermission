@@ -217,7 +217,7 @@ moving sensors between bridges later re-creates them in Apple Home.
 
 **Tabs:** Sensors (cards with a plain-language summary, drag to reorder, an editor per sensor with a Now playing
 panel), Guide (automations for the presets in use first, with Home app screenshots), Settings (setup, credits,
-webhooks, advanced, diagnostics, reset).
+webhooks, advanced, diagnostics with a live view of the kept log, reset).
 
 **Sign-in:** a PIN from `plex.tv/api/v2/pins`, polled until it carries a token. Players combine the account's devices,
 each server's device list and play history, and current sessions, most used first.

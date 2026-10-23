@@ -4,7 +4,7 @@ import {
   CONDITIONS, DEFAULT_WEBHOOK_PORT, EVENTS, EXCEPTIONS, CAN_EXCEPT, CREDITS_MODES, LIBRARY_KINDS, PLATFORM, PRESETS, DEFAULT_PRESET, SENSOR_TYPES, TIMING_FIELDS,
   SHAPES, RESOLUTIONS, DYNAMIC_RANGES, RATINGS,
   applyPreset, defaultSelection, creditsMode, describeFacts, groupIntact, groupPreset, hasMediaConditions, homeKitName, libraryRef, needsPlexPass, presetSensors, sensorId, usesCredits,
-  reconcileSelection, reconcileSensors, newChildBridge, newSensor, playerRef, setTiming, summarize, timingValue,
+  reconcileSelection, reconcileSensors, followSelection, missingSetupPlayers, playerLabel, newChildBridge, newSensor, playerRef, setTiming, summarize, timingValue,
 } from './model.js';
 
 const root = document.getElementById('intermission');
@@ -348,9 +348,14 @@ async function loadDiscovery(next, { keepSelection = false } = {}) {
 }
 
 async function finishSetup() {
+  // Sensors that watched exactly the old choices follow the new ones.
+  const followed = followSelection(state.config.sensors, state.config.selection, state.selection);
+  state.config.sensors = followed.sensors;
   if (state.setupServers) {
     if (state.config.sensors.length > 0) {
-      state.config.sensors = reconcileSensors(state.config.sensors, state.discovery, savedServerIds(), state.config.selection?.libraries ?? []);
+      const others = state.config.sensors.filter((s) => !followed.followedLibraries.has(s.id));
+      const reconciled = reconcileSensors(others, state.discovery, savedServerIds(), state.config.selection?.libraries ?? []);
+      state.config.sensors = state.config.sensors.map((s) => reconciled.find((r) => r.id === s.id) ?? s);
     }
     state.config.servers = state.setupServers;
     state.setupServers = undefined;
@@ -412,6 +417,7 @@ function render() {
     root.innerHTML = `<div class="im-alert im-alert-danger">Something went wrong showing this page: ${escape(error.message)}</div>
       <button class="btn btn-outline-secondary" data-action="reload">Reload</button>${footer()}`;
   }
+  showLiveLog();
   homebridge.fixScrollHeight?.();
 }
 
@@ -668,7 +674,7 @@ function sensorsTab() {
       ${members.map(([s, i]) => sensorCard(s, i, sel)).join('')}
     </div>`);
   });
-  return `${pairingCard()}${webhookNotice()}
+  return `${pairingCard()}${webhookNotice()}${missingPlayersNotice()}
     ${parts.join('') || '<p class="im-muted">No sensors yet. Add a preset, or a sensor of your own.</p>'}
     <div class="d-flex flex-wrap gap-2 mt-2">
       <button class="btn btn-im" data-action="add" data-type="occupancy">Add sensor</button>
@@ -677,6 +683,25 @@ function sensorsTab() {
     </div>
     ${presetPanel()}
     <p class="im-muted small mt-3">Drag cards to reorder. Changes apply after you press Save and restart Homebridge. Renaming keeps your Home automations.</p>`;
+}
+
+/** Offers to add players chosen in setup that sensors leave out, such as a second app on the same Apple TV. */
+function missingPlayersNotice() {
+  const sel = selection();
+  const { players, sensorIds } = missingSetupPlayers(state.config.sensors, sel);
+  if (players.length === 0) {
+    return '';
+  }
+  const names = players.map((p) => playerLabel(p, sel.players)).join(', ');
+  const count = sensorIds.length;
+  return `<div class="im-card im-banner mb-3" id="im-missing-players">
+    <strong>${players.length === 1 ? 'A player you chose is' : 'Players you chose are'} not on ${count === 1 ? '1 sensor' : `${count} sensors`}</strong>
+    <p class="small mb-2 mt-1">${escape(names)} ${players.length === 1 ? 'was' : 'were'} chosen in setup, but ${count === 1 ? 'a sensor only watches' : 'these sensors only watch'} the other players, so playback there is ignored.</p>
+    <div class="d-flex flex-wrap gap-2">
+      <button class="btn btn-sm btn-im" data-action="add-missing-players">Add to ${count === 1 ? 'the sensor' : 'them'}</button>
+      <button class="btn btn-sm btn-outline-secondary" data-action="dismiss-missing-players">Leave as is</button>
+    </div>
+  </div>`;
 }
 
 /** The preset list, and the "Add alongside / Replace" choice when sensors already exist. */
@@ -750,7 +775,7 @@ function editor(sensor, sel) {
         (e) => `${EVENTS[e].label}${EVENTS[e].plexPass ? ' ★' : ''}`, (e) => noPass && EVENTS[e].plexPass)}</div>
         <div class="im-hint">★ needs Plex Pass</div>`}
     <label class="im-label">Players</label>
-    ${filter('players', players, (p) => p.name, 'All players')}
+    ${filter('players', players, (p) => playerLabel(p, players), 'All players')}
     <label class="im-label">People</label>
     ${filter('users', users, (u) => u, 'All Plex Home users')}
     <label class="im-label">Libraries</label>
@@ -1012,7 +1037,7 @@ function advancedTab() {
       <strong>Your setup</strong>
       <dl class="im-facts">
         <dt>Plex servers</dt><dd>${escape(servers().map((s) => s.name).join(', ') || 'None')}</dd>
-        <dt>Players</dt><dd>${escape(sel.allPlayers ? 'All players' : sel.players.map((p) => p.name).join(', ') || 'None')}</dd>
+        <dt>Players</dt><dd>${escape(sel.allPlayers ? 'All players' : sel.players.map((p) => playerLabel(p, sel.players)).join(', ') || 'None')}</dd>
         <dt>People</dt><dd>${escape(sel.allUsers === false ? sel.users.join(', ') : 'All Plex Home users')}</dd>
         <dt>Libraries</dt><dd>${escape(libraryNames)}</dd>
         <dt>Bridge</dt><dd>${state.config._bridge ? `Intermission's own bridge${state.pairing?.paired ? ', in the Home app' : ''}` : 'Main Homebridge bridge'}</dd>
@@ -1067,7 +1092,7 @@ function advancedTab() {
     ${collapsible('advanced', 'Advanced', 'Timing, logging and commands. These rarely need changing.', `
       ${fields}
       <div class="im-field">
-        <label for="im-detailed"><strong>Detailed logging</strong><small>Shows every Plex report, event and decision in the Homebridge log, including why each sensor follows or ignores a playback. Diagnostics includes this detail either way, so you only need it to watch along live.</small></label>
+        <label for="im-detailed"><strong>Detailed logging</strong><small>Shows every Plex report, event and decision in the Homebridge log, including why each sensor follows or ignores a playback. Diagnostics and Watch live include this detail either way, so you only need it to see the detail in the Homebridge log.</small></label>
         <div class="form-check form-switch"><input id="im-detailed" class="form-check-input" type="checkbox" data-detailed ${state.config.detailedLogging ? 'checked' : ''}></div>
       </div>
       ${commandsSection()}`)}
@@ -1100,9 +1125,59 @@ function diagnosticsCard() {
         <button class="btn btn-sm btn-im" data-action="download-diagnostics">Download diagnostics</button>
         <button class="btn btn-sm btn-outline-secondary" data-action="copy-diagnostics">Copy</button>
         <button class="btn btn-sm btn-outline-secondary" data-action="show-diagnostics">${state.report ? 'Refresh' : 'Show'}</button>
+        <button class="btn btn-sm btn-outline-secondary" data-action="toggle-live" aria-pressed="${state.live ? 'true' : 'false'}">${state.live ? 'Stop watching' : 'Watch live'}</button>
       </div>
-      ${state.report ? `<textarea class="form-control im-report mt-2" readonly rows="16">${escape(state.report)}</textarea>` : ''}
+      ${state.live ? `<p class="im-hint mt-2 mb-1">The log as it happens, newest first, in your local time and with names, since only you see it here. Updates every 2 seconds.</p>
+        <pre class="form-control im-report im-live-log mb-0" id="im-live-log" tabindex="0"></pre>` : ''}
+      ${state.report && !state.live ? `<textarea class="form-control im-report mt-2" readonly rows="16">${escape(state.report)}</textarea>` : ''}
     </div>`;
+}
+
+/* ---------- watch live ---------- */
+
+/** Fills the live log after a render, which replaces the element. */
+function showLiveLog() {
+  const box = document.getElementById('im-live-log');
+  if (box && state.live) {
+    // Local time, since this is read as it happens; the file keeps UTC.
+    box.textContent = state.live.lines.map((line) => line.replace(/^\d{4}-\d\d-\d\dT[\d:.]+Z/, (iso) => new Date(iso).toLocaleTimeString())).join('\n');
+  }
+}
+
+function startLive() {
+  state.live = { lines: ['Loading…'], timer: undefined };
+  render();
+  void pollLive();
+}
+
+function stopLive() {
+  if (state.live) {
+    clearTimeout(state.live.timer);
+    state.live = undefined;
+  }
+}
+
+/** Reads the newest lines every 2 seconds while the live log is on screen. */
+async function pollLive() {
+  const live = state.live;
+  if (!live) {
+    return;
+  }
+  try {
+    live.lines = await request('/diagnostics/live', {});
+  } catch (error) {
+    live.lines = [`Could not read the log: ${error.message}`];
+  }
+  if (state.live !== live) {
+    return;
+  }
+  if (!document.getElementById('im-live-log')) {
+    // Another tab or view: stop until asked again.
+    stopLive();
+    return;
+  }
+  showLiveLog();
+  live.timer = setTimeout(() => void pollLive(), POLL_MS);
 }
 
 async function loadDiagnostics() {
@@ -1369,6 +1444,20 @@ const actions = {
     return changed();
   }),
   'cancel-confirm': () => { state.confirming = undefined; render(); },
+  'add-missing-players': () => {
+    const sel = selection();
+    const { players, sensorIds } = missingSetupPlayers(state.config.sensors, sel);
+    state.config.sensors = state.config.sensors.map((s) => (sensorIds.includes(s.id)
+      ? { ...s, filters: { ...s.filters, players: [...new Set([...s.filters.players, ...players.map((p) => p.id)])] } }
+      : s));
+    return changed();
+  },
+  'dismiss-missing-players': () => {
+    const sel = selection();
+    const { players } = missingSetupPlayers(state.config.sensors, sel);
+    state.config.selection = { ...sel, dismissedPlayers: [...new Set([...(sel.dismissedPlayers ?? []), ...players.map((p) => p.id)])] };
+    return changed();
+  },
   'zoom-shot': (el) => {
     el.closest('.im-shot').classList.toggle('im-shot-zoom');
     homebridge.fixScrollHeight?.();
@@ -1490,7 +1579,18 @@ const actions = {
     state.webhookPlan = { add: false, remove: [] };
     homebridge.toast.success('The Intermission webhook was removed from your Plex account.', 'Plex webhooks');
   })),
-  'show-diagnostics': () => busy('Collecting diagnostics…', loadDiagnostics),
+  'show-diagnostics': () => {
+    stopLive();
+    return busy('Collecting diagnostics…', loadDiagnostics);
+  },
+  'toggle-live': () => {
+    if (state.live) {
+      stopLive();
+      render();
+    } else {
+      startLive();
+    }
+  },
   'copy-diagnostics': async () => {
     // Text already shown, and still for the same name setting, is copied inside the click.
     const fresh = state.report && state.reportNames === (state.includeNames === true);

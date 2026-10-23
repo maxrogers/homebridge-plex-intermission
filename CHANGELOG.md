@@ -5,6 +5,23 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-23
+
+### Fixed
+
+- Players added later with *Change servers, players and libraries* now reach the sensors. Sensors that watched exactly
+  the old choices of players, people or libraries follow the new ones; filters set by hand stay as they are.
+- Sensors saved before this fix that leave out a player chosen in setup get a notice on the Sensors tab, with *Add to
+  the sensor* or *Leave as is*.
+
+### Changed
+
+- Players with the same name, such as Plex and Infuse on one Apple TV, are shown with their app (or the start of their
+  ID) in sensor summaries, filters, the diagnostics file and the log.
+- Saved players take Plex's current name and app when setup runs again.
+- Diagnostics: the log is newest first, and *Watch live* shows the log as it happens, in local time and with names,
+  without downloading anything.
+
 ## [1.0.0] - 2026-10-23
 
 First public release.
@@ -55,5 +72,6 @@ First public release.
   Home app.
 - Lost connections to Plex are retried with their reasons logged, with a warning if Plex stays unreachable.
 
-[Unreleased]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/maxrogers/homebridge-plex-intermission/releases/tag/v1.0.0

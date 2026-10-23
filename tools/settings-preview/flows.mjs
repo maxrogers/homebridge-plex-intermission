@@ -649,6 +649,63 @@ await flow('Diagnostics: Show, include names, Download', async () => {
   assert.match(await page.inputValue('.im-report'), /Dune: Part Two/);
 });
 
+await flow('Diagnostics: Watch live updates in place, and stops on another tab', async () => {
+  const { page } = await open({ s: 'main' });
+  await settingsTab(page);
+  await click(page, '[data-action=toggle-live]');
+  await page.waitForTimeout(300);
+  const first = await page.textContent('#im-live-log');
+  assert.match(first, /^.*Poll \d+\n.*Dune: Part Two, Living Room/, 'newest first, with names');
+  await page.waitForTimeout(2300);
+  assert.notEqual(await page.textContent('#im-live-log'), first, 'updated');
+  assert.equal(await page.textContent('[data-action=toggle-live]'), 'Stop watching');
+  await click(page, '[data-action=tab][data-id=sensors]');
+  await page.waitForTimeout(2300);
+  const polls = await page.evaluate(() => window.__liveCount());
+  await page.waitForTimeout(2300);
+  assert.equal(await page.evaluate(() => window.__liveCount()), polls, 'polling stopped');
+  await settingsTab(page);
+  assert.equal(await page.textContent('[data-action=toggle-live]'), 'Watch live', 'off after leaving');
+  await click(page, '[data-action=toggle-live]');
+  await click(page, '[data-action=toggle-live]');
+  assert.equal(await page.$('#im-live-log'), null);
+});
+
+await flow('Same-name players: chips show the app; a player added in setup reaches the sensors', async () => {
+  const { page } = await open({ s: 'main', servers: 'srv', twin: '1', existing: existing(['srv'], ['srv/1', 'srv/2']) });
+  await click(page, '[data-action=tab][data-id=advanced]');
+  await click(page, '[data-action=redo-setup]');
+  await page.waitForTimeout(300);
+  await click(page, '[data-action=use-servers]').catch(() => undefined);
+  await page.click('[data-action=webhooks-next]').catch(() => undefined);
+  await page.waitForTimeout(300);
+  await click(page, '[data-action=toggle-player][data-id="1AF4CEC1-CE71"]');
+  await click(page, '[data-action=to-template]');
+  const c = await config(page);
+  assert.ok(c.sensors.every((s) => s.filters.players.join() === 'ATV,1AF4CEC1-CE71'), JSON.stringify(c.sensors.map((s) => s.filters.players)));
+  assert.equal(await page.$('#im-missing-players'), null, 'nothing to offer');
+  assert.match(await page.textContent('.im-sensor .im-summary'), /Living Room \(Apple TV\).*Living Room \(Infuse\)/, 'summary tells them apart');
+  await click(page, '[data-action=edit]');
+  assert.match(await page.textContent('.im-editor'), /Living Room \(Infuse\)/);
+});
+
+await flow('Same-name players: sensors saved before the fix are offered the missing player', async () => {
+  const saved = JSON.parse(existing(['srv'], ['srv/1', 'srv/2']));
+  saved.selection.players.push({ id: '1AF4CEC1-CE71', name: 'Living Room', product: 'Infuse' });
+  const { page } = await open({ s: 'main', servers: 'srv', twin: '1', existing: JSON.stringify(saved) });
+  assert.match(await page.textContent('#im-missing-players'), /Living Room \(Infuse\).*not on 4 sensors|not on 4 sensors[\s\S]*Living Room \(Infuse\)/);
+  await click(page, '[data-action=add-missing-players]');
+  assert.equal(await page.$('#im-missing-players'), null);
+  assert.ok((await config(page)).sensors.every((s) => s.filters.players.includes('1AF4CEC1-CE71')));
+
+  const { page: other } = await open({ s: 'main', servers: 'srv', twin: '1', existing: JSON.stringify(saved) });
+  await click(other, '[data-action=dismiss-missing-players]');
+  assert.equal(await other.$('#im-missing-players'), null);
+  const c = await config(other);
+  assert.deepEqual(c.selection.dismissedPlayers, ['1AF4CEC1-CE71']);
+  assert.ok(c.sensors.every((s) => s.filters.players.join() === 'ATV'), 'sensors unchanged');
+});
+
 await flow('Webhooks: remove an old address, add Intermission\'s, remove it again', async () => {
   const { page } = await open({ s: 'main' });
   await settingsTab(page);

@@ -92,9 +92,15 @@ export function mediaMatches(conditions: MediaConditions, facts: MediaFacts | un
 }
 
 /** Why a filter leaves out this playback, or undefined when it allows it. For detailed logging. */
-export function filterMismatch(filters: SensorFilters, context: MatchContext, names: { player?: string; library?: string } = {}): string | undefined {
+export function filterMismatch(
+  filters: SensorFilters,
+  context: MatchContext,
+  names: { player?: string; product?: string; library?: string } = {},
+): string | undefined {
   if (filters.players.length > 0 && (context.playerId === undefined || !filters.players.includes(context.playerId))) {
-    return `player ${playerName(names.player ?? context.playerId ?? 'unknown')} is not chosen`;
+    // The app or ID tells apart players with the same name, such as two apps on one Apple TV.
+    const tell = names.product ?? context.playerId?.slice(0, 8);
+    return `player ${playerName(names.player ?? context.playerId ?? 'unknown')}${names.player && tell ? ` (${tell})` : ''} is not chosen`;
   }
   if (filters.users.length > 0 && (context.user === undefined || !filters.users.includes(context.user))) {
     return `${context.user === undefined ? 'the person is unknown' : `${person(context.user)} is not chosen`}`;

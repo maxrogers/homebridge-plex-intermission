@@ -6,7 +6,7 @@ import qrcode from 'qrcode-generator';
 
 import { CommandRunner } from '../dist/commands.js';
 import { PlexHttpError } from '../dist/plex/server.js';
-import { diagnosticsReport } from '../dist/report.js';
+import { diagnosticsReport, liveLog } from '../dist/report.js';
 import { SetupError, SetupService, webhookOptionsFrom } from '../dist/setup-service.js';
 import { Storage } from '../dist/storage.js';
 
@@ -62,6 +62,7 @@ class IntermissionUiServer extends HomebridgePluginUiServer {
       timeZone: typeof body.timeZone === 'string' ? body.timeZone.slice(0, 80) : undefined,
       includeNames: body.includeNames === true,
     }, new Date()));
+    this.handle('/diagnostics/live', () => liveLog(service));
     this.ready();
   }
 

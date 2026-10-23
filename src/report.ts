@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 
-import { commandLine, person, player, readDiagnostics, redact, scrubSecrets } from './diagnostics.js';
+import { commandLine, person, player, readDiagnostics, redact, scrubSecrets, tailDiagnostics } from './diagnostics.js';
 import { hidePublicAddresses, maskAddress } from './network.js';
 import type { PortState, ReportInput, SetupService } from './setup-service.js';
 import { webhookOptionsFrom } from './setup-service.js';
@@ -100,8 +100,14 @@ export async function setupReport(service: SetupService, input: ReportInput): Pr
  */
 export async function diagnosticsReport(service: SetupService, input: ReportInput & { includeNames?: boolean }, now: Date): Promise<string> {
   const config = input.config;
-  const selection = (config.selection ?? {}) as { players?: { id: string; name?: string }[]; libraries?: { key: string; title?: string }[] };
-  const playerNames = new Map((selection.players ?? []).map((p) => [p.id, p.name ?? p.id]));
+  const selection = (config.selection ?? {}) as { players?: { id: string; name?: string; product?: string }[]; libraries?: { key: string; title?: string }[] };
+  const players = new Map((selection.players ?? []).map((p) => [p.id, p]));
+  // The app and the start of the ID tell apart players with the same name.
+  const describePlayer = (id: string) => {
+    const found = players.get(id);
+    const tell = [found?.product, id.slice(0, 8)].filter(Boolean).join(', ');
+    return found?.name ? `${player(found.name)} (${tell})` : id;
+  };
   const libraryNames = new Map((selection.libraries ?? []).map((l) => [l.key, l.title ?? l.key]));
   const commands = new Map(((config.commands as { list?: { id: string; name?: string; command?: string }[] } | undefined)?.list ?? []).map((c) => [c.id, c]));
   const list = (values: unknown, name: (v: string) => string, all: string) => {
@@ -125,7 +131,7 @@ export async function diagnosticsReport(service: SetupService, input: ReportInpu
     lines.push(sensor.type === 'button'
       ? `  pressed on: ${list(sensor.events, (e) => e, 'nothing')}`
       : `  on while: ${String(sensor.state)}${Array.isArray(sensor.except) && sensor.except.length ? `, except ${sensor.except.join(' and ')}` : ''}`);
-    lines.push(`  players: ${list(f.players, (id) => player(playerNames.get(id) ?? id), 'all')}`);
+    lines.push(`  players: ${list(f.players, describePlayer, 'all')}`);
     lines.push(`  people: ${list(f.users, (u) => person(u), 'all')}`);
     lines.push(`  libraries: ${list(f.libraries, (k) => libraryNames.get(k) ?? k, 'all')}`);
     if (sensor.media && Object.keys(sensor.media).length) {
@@ -141,11 +147,27 @@ export async function diagnosticsReport(service: SetupService, input: ReportInpu
       lines.push(`${command.name ?? '?'}: ${commandLine(command.command ?? '')}`);
     }
   }
-  const log = await readDiagnostics(service.storage.directory);
-  lines.push('', `== Recent log (${log.length} lines, oldest first, detailed) ==`, ...(log.length ? log : ['Nothing logged yet. Restart Homebridge once, so Intermission starts keeping its log.']));
+  const log = (await readDiagnostics(service.storage.directory)).reverse();
+  lines.push('', `== Recent log (${log.length} lines, newest first, detailed) ==`, ...(log.length ? log : [NOTHING_LOGGED]));
+  return hidePublicAddresses(scrubSecrets(redact(lines.join('\n'), input.includeNames === true), await secretsOf(service)));
+}
 
+const NOTHING_LOGGED = 'Nothing logged yet. Restart Homebridge once, so Intermission starts keeping its log.';
+
+/**
+ * The newest lines of the kept log, newest first, for watching on the settings page. Shown only on
+ * this machine, so names are kept; secrets are still removed.
+ */
+export async function liveLog(service: SetupService, maxLines = 200): Promise<string[]> {
+  const log = (await tailDiagnostics(service.storage.directory, maxLines)).reverse();
+  if (log.length === 0) {
+    return [NOTHING_LOGGED];
+  }
+  return scrubSecrets(redact(log.join('\n'), true), await secretsOf(service)).split('\n');
+}
+
+async function secretsOf(service: SetupService): Promise<string[]> {
   const credentials = await service.storage.readCredentials();
   const { webhookSecret } = await service.storage.state();
-  const secrets = [webhookSecret, credentials?.accountToken, ...Object.values(credentials?.serverTokens ?? {})].filter((s): s is string => Boolean(s));
-  return hidePublicAddresses(scrubSecrets(redact(lines.join('\n'), input.includeNames === true), secrets));
+  return [webhookSecret, credentials?.accountToken, ...Object.values(credentials?.serverTokens ?? {})].filter((s): s is string => Boolean(s));
 }

@@ -162,6 +162,7 @@
 .im .im-field small { display: block; margin-top: 0.1rem; }
 .im .im-field:last-child { border-bottom: 0; }
 .im .im-report { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; white-space: pre; }
+.im .im-live-log { height: 24rem; overflow: auto; }
 
 .im .im-recipe ol { padding-left: 1.2rem; }
 .im .im-recipe li { margin-bottom: 0.3rem; }

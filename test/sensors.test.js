@@ -3,7 +3,8 @@ import test from 'node:test';
 
 import * as hap from '@homebridge/hap-nodejs';
 
-import { matchesFilters, stateHolds } from '../dist/sensors/rules.js';
+import { filterMismatch, matchesFilters, stateHolds } from '../dist/sensors/rules.js';
+import { unmark } from '../dist/diagnostics.js';
 import { SensorAccessory } from '../dist/sensors/sensor-accessory.js';
 
 const none = { players: [], users: [], libraries: [] };
@@ -153,3 +154,11 @@ test('a guarded clock reports a failing timer instead of throwing', async () => 
   assert.deepEqual(errors, ['timer failed']);
 });
 
+
+test('the reason a player is ignored names its app, or the start of its ID', () => {
+  const filters = { players: ['ATV-PLEX'], users: [], libraries: [] };
+  const context = { playerId: '1AF4CEC1-CE71-4863-9574-1779931694B3' };
+  assert.equal(unmark(filterMismatch(filters, context, { player: 'Apple TV', product: 'Infuse' })), 'player Apple TV (Infuse) is not chosen');
+  assert.equal(unmark(filterMismatch(filters, context, { player: 'Apple TV' })), 'player Apple TV (1AF4CEC1) is not chosen');
+  assert.equal(filterMismatch(filters, { playerId: 'ATV-PLEX' }), undefined);
+});

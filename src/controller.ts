@@ -316,7 +316,7 @@ export class Controller {
       if (config.type === 'button' || (mediaOnly && !hasMediaConditions(config.media))) {
         continue;
       }
-      const reason = filterMismatch(config.filters, context, { player: session.playerTitle, library: session.media.librarySectionTitle })
+      const reason = filterMismatch(config.filters, context, { player: session.playerTitle, product: session.product, library: session.media.librarySectionTitle })
         ?? (hasMediaConditions(config.media) ? mediaMismatch(config.media, this.factsFor(session.media)) : undefined);
       this.options.log.debug('  %s: %s', config.name, reason ? `ignores this playback: ${reason}` : 'follows this playback');
     }

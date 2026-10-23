@@ -226,7 +226,7 @@ test('diagnostics: setup, sensors and the kept log, without secrets, with names 
   };
   const text = await diagnosticsReport(service, { config, servers }, new Date());
   assert.match(text, /== Sensors ==/);
-  assert.match(text, /players: Player 1/);
+  assert.match(text, /players: Player 1 \(ATV\)/, 'the start of the ID tells apart players with the same name');
   assert.match(text, /people: Person \d/);
   assert.match(text, /libraries: Movies/);
   assert.match(text, /on: Projector Control/);
@@ -237,6 +237,16 @@ test('diagnostics: setup, sensors and the kept log, without secrets, with names 
   assert.ok(!text.includes(secret), 'the webhook key never appears');
   assert.match(text, /x\.x\.x\.x:32400/, 'public addresses are hidden');
   assert.doesNotMatch(text, /⁣/, 'no markers left');
+  const order = text.slice(text.indexOf('== Recent log'));
+  assert.match(order, /newest first/);
+  assert.ok(order.indexOf('Webhook path') < order.indexOf('Media Playing: on'), 'newest first');
+
+  const { liveLog } = await import('../dist/report.js');
+  const live = await liveLog(service);
+  assert.match(live[0], /Webhook path/, 'live log is newest first');
+  assert.ok(live.some((line) => line.includes('Media Playing: on (Dune: Part Two, Living Room)')), 'live log keeps names');
+  assert.ok(!live.join('\n').includes(secret), 'live log never has the webhook key');
+  assert.doesNotMatch(live.join('\n'), /abcdef123456|⁣/);
 
   const named = await diagnosticsReport(service, { config, servers, includeNames: true }, new Date());
   assert.match(named, /Dune: Part Two/);
@@ -260,4 +270,26 @@ test('the kept log rolls over and keeps the newest lines', async (t) => {
   const lines = await readDiagnostics(dir);
   assert.match(lines.at(-1), /line 199$/);
   assert.ok(lines.length < 200, 'old lines are dropped');
+});
+
+test('the live log reads only the end of the kept log', async (t) => {
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { DiagnosticLog, tailDiagnostics } = await import('../dist/diagnostics.js');
+  const dir = await mkdtemp(join(tmpdir(), 'im-tail-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  assert.deepEqual(await tailDiagnostics(dir), [], 'nothing kept yet');
+  const log = new DiagnosticLog(dir, 1_000_000, 0);
+  for (let i = 0; i < 500; i++) {
+    log.add('debug', 'line %d', [i]);
+  }
+  await log.flush();
+  const lines = await tailDiagnostics(dir, 50, 2_000);
+  assert.ok(lines.length <= 50 && lines.length > 10);
+  assert.match(lines.at(-1), /line 499$/);
+  assert.ok(lines.every((line) => /^\d{4}-.* debug line \d+$/.test(line)), 'no line cut part way');
+  const few = await tailDiagnostics(dir, 5);
+  assert.equal(few.length, 5);
+  assert.match(few[0], /line 495$/);
 });

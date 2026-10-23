@@ -33,7 +33,7 @@ Intermission never controls your lights; you choose what happens in the Home app
   ratings or Plex labels.
 - **A Guide** in the settings page with the Home automations for your preset, including gentle fades, with screenshots.
 - **Diagnostics** in one file for bug reports, never with your Plex sign-in, and without titles or names unless you
-  include them.
+  include them. **Watch live** shows the log as it happens, right in the settings page.
 
 ## Presets
 
@@ -92,7 +92,8 @@ Intermission talks only to plex.tv and your Plex servers, with no analytics. See
 
 - **Something didn't happen when it should have:** in the plugin's settings, open **Settings**, then **Diagnostics**,
   and download the diagnostics file soon afterwards. It includes Intermission's recent log, so you don't need to turn on
-  extra logging first. It leaves out your Plex sign-in, and titles and names unless you include them.
+  extra logging first. It leaves out your Plex sign-in, and titles and names unless you include them. To see what
+  Intermission makes of something as you do it, press **Watch live** there instead.
 - **Webhooks:** **Settings**, then **Plex Pass and webhooks**, shows whether Plex has the webhook, whether your server's
   Webhooks setting is on, and whether Intermission is listening on its port.
 - **Sensors not in the Home app:** with the child bridge, add Intermission in the Home app with the code on the Sensors

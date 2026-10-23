@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { parseConfig } from '../dist/config.js';
 import {
-  defaultSelection, needsPlexPass, PRESETS, presetSensors, presetsInUse, newSensor, setTiming, summarize, TIMING_FIELDS, timingValue,
+  defaultSelection, followSelection, missingSetupPlayers, needsPlexPass, playerLabel, PRESETS, presetSensors, presetsInUse, newSensor, setTiming, summarize, TIMING_FIELDS, timingValue,
 } from '../homebridge-ui/public/model.js';
 import { silentLog } from './helpers.js';
 
@@ -209,4 +209,54 @@ test('presets in use are recognised from the sensors', () => {
     { type: 'occupancy', state: 'playing', except: ['credits', 'intro'] },
   ];
   assert.deepEqual(presetsInUse(custom), [], 'media conditions, other states, buttons and extra exceptions are custom');
+});
+
+const twoApps = [
+  { id: 'ATV-PLEX', name: 'Apple TV', product: 'Plex for Apple TV' },
+  { id: '1AF4CEC1-CE71-4863-9574-1779931694B3', name: 'Apple TV', product: 'Infuse' },
+  { id: 'IPAD', name: 'iPad', product: 'Plex for iOS' },
+];
+
+test('players with the same name are told apart by app, or by ID when the apps match', () => {
+  assert.equal(playerLabel(twoApps[2], twoApps), 'iPad', 'a unique name stays as is');
+  assert.equal(playerLabel(twoApps[1], twoApps), 'Apple TV (Infuse)');
+  // "Plex for Apple TV" shortens to the player's own name, which tells nothing, so the ID is used.
+  assert.equal(playerLabel(twoApps[0], twoApps), 'Apple TV (ATV-PLEX)');
+  const same = [{ id: 'AAAAAAAA1', name: 'TV', product: 'Plex for LG' }, { id: 'BBBBBBBB2', name: 'TV', product: 'Plex for LG' }];
+  assert.equal(playerLabel(same[0], same), 'TV (AAAAAAAA)');
+  const sel = { players: twoApps };
+  const sensor = { type: 'occupancy', state: 'playing', filters: { players: ['ATV-PLEX', twoApps[1].id], users: [], libraries: [] } };
+  assert.match(summarize(sensor, sel), /Apple TV \(ATV-PLEX\).*Apple TV \(Infuse\)/);
+});
+
+test('sensors follow new setup choices only where they matched the old ones', () => {
+  const before = { players: [twoApps[0]], allUsers: true, users: [], libraries: [{ key: 'm' }] };
+  const after = { players: [twoApps[0], twoApps[1]], allUsers: true, users: [], libraries: [{ key: 'm' }, { key: 'tv' }] };
+  const sensors = [
+    { id: 'a', filters: { players: ['ATV-PLEX'], users: [], libraries: ['m'] } },
+    { id: 'b', filters: { players: ['IPAD'], users: [], libraries: ['m'] } },
+    { id: 'c', filters: { players: [], users: [], libraries: ['m', 'x'] } },
+  ];
+  const { sensors: result, followedLibraries, changed } = followSelection(sensors, before, after);
+  assert.deepEqual(result[0].filters, { players: ['ATV-PLEX', twoApps[1].id], users: [], libraries: ['m', 'tv'] });
+  assert.deepEqual(result[1].filters, { players: ['IPAD'], users: [], libraries: ['m', 'tv'] }, 'players set by hand stay');
+  assert.deepEqual(result[2].filters.libraries, ['m', 'x'], 'libraries set by hand stay');
+  assert.deepEqual([...followedLibraries], ['a', 'b']);
+  assert.equal(changed, 2);
+  assert.equal(followSelection(sensors, undefined, after).changed, 0, 'first setup changes nothing');
+});
+
+test('a player chosen in setup but left off sensors is offered, until dismissed', () => {
+  const selection = { players: twoApps.slice(0, 2), allUsers: true, users: [], libraries: [] };
+  const sensors = [
+    { id: 'a', filters: { players: ['ATV-PLEX'] } },
+    { id: 'b', filters: { players: ['ATV-PLEX', twoApps[1].id] } },
+    { id: 'c', filters: { players: [] } },
+    { id: 'd', filters: { players: ['IPAD'] } },
+  ];
+  const missing = missingSetupPlayers(sensors, selection);
+  assert.deepEqual(missing.players.map((p) => p.product), ['Infuse']);
+  assert.deepEqual(missing.sensorIds, ['a']);
+  assert.equal(missingSetupPlayers(sensors, { ...selection, dismissedPlayers: [twoApps[1].id] }).players.length, 0);
+  assert.equal(missingSetupPlayers(sensors, { ...selection, allPlayers: true }).players.length, 0);
 });

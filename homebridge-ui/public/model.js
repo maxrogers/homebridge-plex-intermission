@@ -337,15 +337,89 @@ function list(names, empty) {
   return names.length <= 2 ? names.join(' or ') : `${names.slice(0, 2).join(', ')} or ${names.length - 2} more`;
 }
 
+/** A product name without the "Plex for" prefix, for example "Apple TV" or "Infuse". */
+const shortProduct = (product) => (product ? product.replace(/^Plex (for|Media Player for) /i, '') : undefined);
+
+/**
+ * A player's name, with its app or the start of its ID added when another player in `players` has the
+ * same name (two apps on one Apple TV are both called "Apple TV").
+ */
+export function playerLabel(player, players = []) {
+  if (!player) {
+    return '';
+  }
+  const twins = players.filter((p) => p.id !== player.id && p.name === player.name);
+  if (twins.length === 0) {
+    return player.name;
+  }
+  const product = shortProduct(player.product);
+  const tell = product && product !== player.name && !twins.some((t) => shortProduct(t.product) === product) ? product : player.id.slice(0, 8);
+  return `${player.name} (${tell})`;
+}
+
+/**
+ * Brings sensors along when the setup choices change: a sensor whose players, people or libraries
+ * were exactly the old choices gets the new ones; filters set by hand stay as they are. Returns the
+ * sensors, and the IDs of those whose libraries followed.
+ */
+export function followSelection(sensors, before, after) {
+  if (!before) {
+    return { sensors, followedLibraries: new Set(), changed: 0 };
+  }
+  const was = filtersFrom(before);
+  const now = filtersFrom(after);
+  const same = (a = [], b = []) => a.length === b.length && a.every((v) => b.includes(v));
+  const followedLibraries = new Set();
+  let changed = 0;
+  const result = sensors.map((sensor) => {
+    const filters = { ...sensor.filters };
+    let touched = false;
+    for (const key of ['players', 'users', 'libraries']) {
+      if (same(filters[key], was[key]) && !same(was[key], now[key])) {
+        filters[key] = [...now[key]];
+        touched = true;
+        if (key === 'libraries') {
+          followedLibraries.add(sensor.id);
+        }
+      }
+    }
+    changed += touched ? 1 : 0;
+    return touched ? { ...sensor, filters } : sensor;
+  });
+  return { sensors: result, followedLibraries, changed };
+}
+
+/**
+ * Players chosen in setup that some sensors leave out, though those sensors otherwise watch only
+ * setup players (so they look like they were meant to follow setup). Players in `dismissedPlayers` are
+ * left out. Returns the players and sensor IDs.
+ */
+export function missingSetupPlayers(sensors, selection) {
+  const dismissed = selection?.dismissedPlayers ?? [];
+  const all = selection?.allPlayers ? [] : (selection?.players ?? []);
+  const ids = all.map((p) => p.id);
+  const chosen = all.filter((p) => !dismissed.includes(p.id));
+  const affected = sensors.filter((s) => {
+    const players = s.filters?.players ?? [];
+    return players.length > 0 && players.every((id) => ids.includes(id)) && chosen.some((p) => !players.includes(p.id));
+  });
+  const missing = chosen.filter((p) => affected.some((s) => !s.filters.players.includes(p.id)));
+  return { players: missing, sensorIds: affected.map((s) => s.id) };
+}
+
 /** One plain-language line describing what a sensor does. */
 export function summarize(sensor, selection = {}) {
   const name = (items, id, key, field = 'id') => items?.find((item) => item[field] === id)?.[key] ?? id;
+  const player = (id) => {
+    const found = selection.players?.find((p) => p.id === id);
+    return found ? playerLabel(found, selection.players) : id;
+  };
   const except = CAN_EXCEPT.includes(sensor.state) ? (sensor.except ?? []) : [];
   const when = SENSOR_TYPES[sensor.type]?.state
     ? `On while ${({ idle: 'nothing is playing', active: 'playing or paused', credits: 'in the credits', intro: 'in the intro' })[sensor.state] ?? (CONDITIONS[sensor.state] ?? CONDITIONS.playing).toLowerCase()}${except.length ? `, except during ${except.map((e) => EXCEPTIONS[e]?.label ?? e).join(' and ')}` : ''}`
     : `Pressed when ${list((sensor.events ?? []).map((e) => EVENTS[e]?.phrase ?? e), 'nothing (choose an event)')}`;
   const f = sensor.filters ?? emptyFilters();
-  const where = list(f.players.map((id) => name(selection.players, id, 'name')), 'any player');
+  const where = list(f.players.map(player), 'any player');
   const what = list(f.libraries.map((key) => name(selection.libraries, key, 'title', 'key')), 'anything');
   const who = list(f.users, 'anyone');
   const media = SENSOR_TYPES[sensor.type]?.state ? mediaPhrases(sensor.media) : [];
@@ -393,8 +467,14 @@ export function reconcileSelection(selection, discovery, previousServerIds = [])
   const keys = new Set(available.map((l) => l.key));
   const added = available.filter((l) => !previousServerIds.includes(l.serverId) && LIBRARY_KINDS[l.kind]?.preselect);
   const kept = (selection.libraries ?? []).filter((l) => keys.has(l.key));
+  // Saved players take Plex's current name and app, so same-name players can be told apart.
+  const players = (selection.players ?? []).map((p) => {
+    const found = discovery.players?.find((d) => d.id === p.id);
+    return found ? playerRef(found) : p;
+  });
   return {
     ...selection,
+    players,
     libraries: selection.allLibraries ? [] : [...kept, ...added.filter((l) => !kept.some((k) => k.key === l.key))],
   };
 }

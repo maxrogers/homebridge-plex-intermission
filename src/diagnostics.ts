@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, rename, stat } from 'node:fs/promises';
+import { appendFile, mkdir, open, readFile, rename, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { Logger } from './engine/types.js';
@@ -159,5 +159,31 @@ const unmarkValue = (value: unknown) => (typeof value === 'string' ? unmark(valu
 export async function readDiagnostics(directory: string, maxLines = 6_000): Promise<string[]> {
   const read = (name: string) => readFile(join(directory, name), 'utf8').then((text) => text.split('\n').filter(Boolean), () => [] as string[]);
   const lines = [...await read(PREVIOUS_FILE), ...await read(DIAGNOSTICS_FILE)];
+  return lines.slice(-maxLines);
+}
+
+/** The last `maxLines` lines of the kept log, oldest first, reading only the end of the files. */
+export async function tailDiagnostics(directory: string, maxLines = 200, maxBytes = 64_000): Promise<string[]> {
+  const tail = async (name: string, bytes: number): Promise<string[]> => {
+    const file = await open(join(directory, name), 'r').catch(() => undefined);
+    if (!file) {
+      return [];
+    }
+    try {
+      const { size } = await file.stat();
+      const length = Math.min(size, bytes);
+      const buffer = Buffer.alloc(length);
+      await file.read(buffer, 0, length, size - length);
+      const lines = buffer.toString('utf8').split('\n').filter(Boolean);
+      // The first line is likely cut part way unless the whole file was read.
+      return length < size ? lines.slice(1) : lines;
+    } finally {
+      await file.close();
+    }
+  };
+  let lines = await tail(DIAGNOSTICS_FILE, maxBytes);
+  if (lines.length < maxLines) {
+    lines = [...await tail(PREVIOUS_FILE, maxBytes), ...lines];
+  }
   return lines.slice(-maxLines);
 }

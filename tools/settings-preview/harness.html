@@ -46,6 +46,10 @@ if (['main', 'edit', 'advanced', 'recipes', 'review', 'ended', 'nopass-adv', 'co
 }
 if (scenario === 'choose') config.servers = [{ id: 'srv', name: 'Unraid', url: 'http://x' }, { id: 'cab', name: 'Cabin', url: 'http://y' }];
 const hook = { plexPass: true, port: 32550, portState: scenario === 'webhooks' ? 'other' : (qs.get('port') ?? 'intermission'), serverSettings: [{ name: 'Unraid', enabled: false }], url: 'http://10.0.0.5:32550/3f9a0c1d2e4b5a6978c0d1e2f3a4b5c6', registered: false, others: ['http://10.69.1.2:32599', 'https://notifiarr.example/api/v1/plex'], stale: ['http://10.69.1.9:32550/3f9a0c1d2e4b5a6978c0d1e2f3a4b5c6'], disabledOn: ['Unraid'] };
+// A second app on the same Apple TV, with the same name.
+if (qs.get('twin')) discovery.players.splice(1, 0, { id: '1AF4CEC1-CE71', name: 'Living Room', product: 'Infuse', platform: 'tvOS', plays: 2 });
+let liveCount = 0;
+window.__liveCount = () => liveCount;
 if (qs.get('hook') === 'ok') Object.assign(hook, { registered: true, stale: [], disabledOn: [], serverSettings: [{ name: 'Unraid', enabled: true }] });
 const report = 'Intermission 0.1.0\nHomebridge UI 5.9.0, Docker, Node.js v24.3.0\n\nPlex account: Steve\nPlex Pass: yes\n\nServer: Unraid (http://10.0.0.2:32400)\n  Version: 1.41.6\n  Credits detection: as a scheduled task and when media is added\n  Webhooks setting: on\n  Library 1: Movies (movie, tv.plex.agents.movie)\n\nSensors: 4';
 const preset = qs.get('existing');
@@ -79,6 +83,7 @@ window.homebridge = {
       case '/reset': return { webhookRemoved: true };
       case '/webhook/remove': return { ...hook, registered: false, stale: [] };
       case '/plexpass/ack': return null;
+      case '/diagnostics/live': liveCount++; return [`2026-10-18T22:10:0${liveCount % 10}.000Z debug Poll ${liveCount}`, '2026-10-18T22:10:00.000Z info  Media Playing: on (Dune: Part Two, Living Room)'];
       case '/diagnostics': return `Intermission diagnostics\nCreated 2026-10-18T23:00:00.000Z. ${body.includeNames ? 'Titles and names are included.' : 'Titles, people, players and command lines are replaced with placeholders.'}\n\n== Setup ==\n${report}\n\n== Recent log ==\n2026-10-18T22:10:01.000Z info  Media Playing: on (${body.includeNames ? 'Dune: Part Two, Living Room' : 'Title 1, Player 1'})`;
       case '/commands/test': return { code: 0, output: 'OK: lens memory 2', timedOut: false };
       case '/about': return { version: '1.0.0', node: 'v24.3.0', repo: 'https://github.com/maxrogers/homebridge-plex-intermission', issues: 'https://github.com/maxrogers/homebridge-plex-intermission/issues', funding: 'https://ko-fi.com/maxrogers' };

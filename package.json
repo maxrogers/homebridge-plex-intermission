@@ -2,7 +2,7 @@
   "name": "homebridge-plex-intermission",
   "displayName": "Intermission for Plex",
   "type": "module",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Apple Home sensors for every moment of Plex playback: playing, paused, credits and nothing playing. Timed to Plex's credits markers, instant without polling.",
   "author": "maxrogers",
   "license": "MIT",
