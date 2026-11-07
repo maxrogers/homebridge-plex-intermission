@@ -44,6 +44,7 @@ class IntermissionUiServer extends HomebridgePluginUiServer {
     this.handle('/servers', () => service.servers());
     this.handle('/servers/select', (body) => service.selectServers(list(body.ids)));
     this.handle('/discover', (body) => service.discover(body.servers ?? []));
+    this.handle('/players/seen', () => service.players());
     this.handle('/nowplaying', (body) => service.nowPlaying(body.servers ?? []));
 
     this.handle('/webhook/status', (body) => service.webhookStatus(webhook(body)));

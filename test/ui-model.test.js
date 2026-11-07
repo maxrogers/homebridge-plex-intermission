@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { parseConfig } from '../dist/config.js';
 import {
-  defaultSelection, followSelection, missingSetupPlayers, needsPlexPass, playerLabel, PRESETS, presetSensors, presetsInUse, newSensor, setTiming, summarize, TIMING_FIELDS, timingValue,
+  addPlayerId, appOnDevice, defaultSelection, deviceGroups, migrateToDevices, followSelection, missingSetupPlayers, needsPlexPass, newPlayerIds, playerLabel, PRESETS, presetSensors, presetsInUse, newSensor, setTiming, summarize, TIMING_FIELDS, timingValue,
 } from '../homebridge-ui/public/model.js';
 import { silentLog } from './helpers.js';
 
@@ -26,29 +26,32 @@ const discovery = {
   ],
 };
 
-test('setup preselects the most used player and the Movies and TV libraries', () => {
+test('setup preselects the most used device and the Movies and TV libraries', () => {
   const selection = defaultSelection(discovery);
-  assert.deepEqual(selection.players.map((p) => p.id), ['ATV']);
+  assert.deepEqual(selection.players, [], 'chosen by device, not by app');
+  assert.deepEqual(selection.devices.map((d) => [d.name, d.match]), [['Living Room', 'Living Room']]);
   assert.deepEqual(selection.libraries.map((l) => l.key), ['a/1', 'a/2', 'b/1'], 'movie and TV libraries on every server, not music or other videos');
   assert.equal(selection.allUsers, true);
   assert.deepEqual(selection.users, []);
   const live = defaultSelection({ ...discovery, players: [discovery.players[0], { ...discovery.players[1], playingNow: true }] });
-  assert.deepEqual(live.players.map((p) => p.id), ['PHONE'], 'a player that is playing now wins');
+  assert.deepEqual(live.devices.map((d) => d.match), ['iPhone'], 'a device that is playing now wins');
 });
 
 test('Every State produces sensors the plugin accepts', () => {
-  const sensors = presetSensors('states', defaultSelection(discovery));
+  const selection = defaultSelection(discovery);
+  const sensors = presetSensors('states', selection);
   const warnings = [];
-  const config = parseConfig({ sensors }, { ...silentLog, warn: (...args) => warnings.push(args) });
+  const config = parseConfig({ sensors, devices: selection.devices }, { ...silentLog, warn: (...args) => warnings.push(args) });
   assert.equal(warnings.length, 0);
   assert.deepEqual(config.sensors.map((s) => s.name), ['Media Playing', 'Media Paused', 'Credits Rolling', 'Nothing Playing']);
   assert.deepEqual(config.sensors.map((s) => `${s.type}:${s.state}:${s.except.join()}`), ['occupancy:playing:credits', 'occupancy:paused:credits', 'occupancy:credits:', 'occupancy:idle:'], 'all state sensors');
   assert.equal(new Set(config.sensors.map((s) => s.id)).size, 4);
-  assert.deepEqual(config.sensors[0].filters, { players: ['ATV'], users: [], libraries: ['a/1', 'a/2', 'b/1'] });
+  const device = { id: selection.devices[0].id, name: 'Living Room', match: 'Living Room', apps: [] };
+  assert.deepEqual(config.sensors[0].filters, { players: [], devices: [device], exceptPlayers: [], users: [], libraries: ['a/1', 'a/2', 'b/1'] });
   const some = presetSensors('states', { ...defaultSelection(discovery), allUsers: false, users: ['Steve'] });
   assert.deepEqual(some[0].filters.users, ['Steve']);
   const everything = presetSensors('states', { ...defaultSelection(discovery), allPlayers: true, allLibraries: true });
-  assert.deepEqual(everything[0].filters, { players: [], users: [], libraries: [] }, 'All means no filter');
+  assert.deepEqual(everything[0].filters, { players: [], devices: [], exceptPlayers: [], users: [], libraries: [] }, 'All means no filter');
 });
 
 test('new sensors are valid', () => {
@@ -73,9 +76,10 @@ test('summaries read as a sentence', () => {
 test('new sensors start from the setup choices', () => {
   const selection = defaultSelection(discovery);
   const sensor = newSensor('occupancy', selection);
-  assert.deepEqual(sensor.filters, { players: selection.players.map((p) => p.id), users: [], libraries: selection.libraries.map((l) => l.key) });
-  assert.deepEqual(newSensor('button', { ...selection, allPlayers: true, allLibraries: true }).filters, { players: [], users: [], libraries: [] });
-  assert.deepEqual(newSensor('occupancy').filters, { players: [], users: [], libraries: [] }, 'no selection: everything');
+  const none = { players: [], devices: [], exceptPlayers: [], users: [], libraries: [] };
+  assert.deepEqual(sensor.filters, { ...none, devices: selection.devices.map((d) => d.id), libraries: selection.libraries.map((l) => l.key) });
+  assert.deepEqual(newSensor('button', { ...selection, allPlayers: true, allLibraries: true }).filters, none);
+  assert.deepEqual(newSensor('occupancy').filters, none, 'no selection: everything');
 });
 
 test('advanced fields round-trip through the config ranges', () => {
@@ -259,4 +263,86 @@ test('a player chosen in setup but left off sensors is offered, until dismissed'
   assert.deepEqual(missing.sensorIds, ['a']);
   assert.equal(missingSetupPlayers(sensors, { ...selection, dismissedPlayers: [twoApps[1].id] }).players.length, 0);
   assert.equal(missingSetupPlayers(sensors, { ...selection, allPlayers: true }).players.length, 0);
+});
+
+test('new player IDs: followed ones and look-alikes are offered, and can be added to the right sensors', () => {
+  const now = Date.parse('2026-11-07T03:00:00Z');
+  const selection = { players: [{ id: 'OLD', name: 'Apple TV', product: 'Plex for Apple TV' }, { id: 'INF', name: 'Apple TV', product: 'Infuse' }, { id: 'IPAD', name: 'iPad' }] };
+  const sensors = [
+    { id: 'a', filters: { players: ['OLD', 'INF'] } },
+    { id: 'b', filters: { players: ['IPAD'] } },
+    { id: 'c', filters: { players: [] } },
+  ];
+  const records = {
+    seen: {
+      NEW: { name: 'Apple TV', product: 'Plex for Apple TV', lastPlayedAt: '2026-11-07T02:13:39Z' },
+      GUESS: { name: 'apple tv', lastPlayedAt: '2026-11-06T02:00:00Z' },
+      VIDHUB: { name: 'Apple TV', product: 'VidHub', lastPlayedAt: '2026-11-07T01:00:00Z' },
+      STALE: { name: 'Apple TV', product: 'Plex for Apple TV', lastPlayedAt: '2026-09-01T00:00:00Z' },
+      PHONE: { name: 'iPhone', product: 'Plex for iOS', lastPlayedAt: '2026-11-07T01:00:00Z' },
+      OLD: { name: 'Apple TV', product: 'Plex for Apple TV', lastPlayedAt: '2026-11-01T00:00:00Z' },
+    },
+    followed: { NEW: ['OLD'] },
+  };
+  const found = newPlayerIds(records, selection, sensors, { now });
+  assert.deepEqual(found.map((p) => [p.id, p.followed, p.targets]), [['NEW', true, ['OLD']], ['GUESS', false, ['OLD', 'INF']]],
+    'a different app, an old sighting, another device and a chosen player are not offered');
+  assert.deepEqual(newPlayerIds(records, { ...selection, dismissedPlayers: ['NEW', 'GUESS'] }, sensors, { now }), []);
+  assert.deepEqual(newPlayerIds(records, selection, [{ id: 'c', filters: { players: [] } }], { now }), [], 'nothing to offer when every sensor takes all players');
+
+  const config = addPlayerId({ selection, sensors }, found[0]);
+  assert.deepEqual(config.sensors.map((s) => s.filters.players), [['OLD', 'INF', 'NEW'], ['IPAD'], []]);
+  assert.deepEqual(config.selection.players.at(-1), { id: 'NEW', name: 'Apple TV', product: 'Plex for Apple TV' });
+  assert.equal(newPlayerIds(records, config.selection, config.sensors, { now }).some((p) => p.id === 'NEW'), false, 'gone once added');
+});
+
+test('devices: grouped by reported name; choices made app by app move to devices without adding apps', () => {
+  const known = [
+    { id: 'OLD', name: 'Apple TV', product: 'Plex for Apple TV', plays: 46 },
+    { id: 'NEW', name: 'Apple TV', product: 'Plex for Apple TV', playingNow: true },
+    { id: 'INF', name: 'apple tv', product: 'Infuse', plays: 5 },
+    { id: 'PH', name: 'iPhone', plays: 3 },
+  ];
+  const groups = deviceGroups(known);
+  assert.deepEqual(groups.map((g) => [g.match, g.apps.length, g.playingNow]), [['Apple TV', 3, true], ['iPhone', 1, false]]);
+
+  const config = {
+    selection: { players: [{ id: 'OLD', name: 'Apple TV' }, { id: 'NEW', name: 'Apple TV' }], allUsers: true, users: [], libraries: [] },
+    sensors: [
+      { id: 'a', filters: { players: ['OLD', 'NEW'], users: [], libraries: [] } },
+      { id: 'b', filters: { players: ['PH', 'GONE'], users: [], libraries: [] } },
+      { id: 'c', filters: { players: [], users: [], libraries: [] } },
+    ],
+  };
+  const moved = migrateToDevices(config, known);
+  assert.deepEqual(moved.devices.map((d) => d.match), ['Apple TV', 'iPhone']);
+  const [tv, phone] = moved.devices;
+  assert.deepEqual(moved.selection.devices.map((d) => d.id), [tv.id]);
+  assert.deepEqual(moved.selection.players, []);
+  assert.deepEqual(moved.selection.exceptPlayers, ['INF'], 'Infuse was never chosen, so it stays out');
+  assert.deepEqual(moved.sensors[0].filters, { players: [], devices: [tv.id], exceptPlayers: ['INF'], users: [], libraries: [] });
+  assert.deepEqual(moved.sensors[1].filters, { players: ['GONE'], devices: [phone.id], exceptPlayers: [], users: [], libraries: [] }, 'unknown IDs stay as they are');
+  assert.equal(moved.sensors[2], config.sensors[2]);
+  assert.equal(migrateToDevices(moved, known), undefined, 'runs once');
+  assert.ok(appOnDevice(tv, { id: 'ANY', name: 'APPLE TV' }));
+  assert.ok(!appOnDevice({ ...tv, apps: ['NEW'] }, { id: 'ANY', name: 'Apple TV' }));
+  assert.match(summarize({ type: 'occupancy', state: 'playing', filters: moved.sensors[0].filters }, { devices: moved.devices, known }), /on Apple TV \(not Infuse\)/);
+});
+
+test('devices narrowed to apps: a look-alike is offered and joins the device; setup apps left off sensors are offered', () => {
+  const now = Date.parse('2026-11-07T03:00:00Z');
+  const device = { id: 'd-1', name: 'Living Room', match: 'Apple TV', apps: ['OLD'] };
+  const sensors = [{ id: 'a', filters: { players: [], devices: ['d-1'], exceptPlayers: [] } }];
+  const records = { seen: { VID: { name: 'Apple TV', product: 'VidHub', lastPlayedAt: '2026-11-07T02:00:00Z' } }, followed: {} };
+  const [found] = newPlayerIds(records, { players: [] }, sensors, { now, devices: [device] });
+  assert.deepEqual(found.targets, ['OLD'], 'another app counts for a narrowed device');
+  const config = addPlayerId({ devices: [device], selection: { devices: [device], players: [] }, sensors }, found);
+  assert.deepEqual(config.devices[0].apps, ['OLD', 'VID']);
+  assert.deepEqual(config.selection.devices[0].apps, ['OLD', 'VID']);
+  assert.deepEqual(config.selection.players, []);
+
+  const selection = { devices: [{ id: 'd-2', match: 'Apple TV' }], exceptPlayers: [] };
+  const left = missingSetupPlayers([{ id: 'x', filters: { players: [], devices: ['d-2'], exceptPlayers: ['INF'] } }], selection, [{ id: 'INF', name: 'Apple TV', product: 'Infuse' }]);
+  assert.deepEqual([left.players.map((p) => p.product), left.sensorIds, left.leftOut], [['Infuse'], ['x'], true]);
+  assert.equal(missingSetupPlayers([{ id: 'x', filters: { players: [], devices: ['d-2'], exceptPlayers: ['INF'] } }], { ...selection, exceptPlayers: ['INF'] }).players.length, 0);
 });

@@ -30,6 +30,8 @@ export interface SessionInfo {
   playerTitle?: string;
   product?: string;
   platform?: string;
+  /** The player's LAN address; only `/status/sessions` gives it. */
+  address?: string;
   user?: string;
   local?: boolean;
   media: MediaInfo;

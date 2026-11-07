@@ -42,6 +42,7 @@ function toSession(playerId: string, player: PlexPlayer | undefined, user: strin
     playerTitle: player?.title,
     product: player?.product,
     platform: player?.platform,
+    ...(player?.address ? { address: player.address } : {}),
     user,
     local: toBoolean(player?.local),
     media: toMedia(metadata),

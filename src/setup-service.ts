@@ -10,6 +10,7 @@ import { PlexHttpError, PlexServer, type PlexServerPrefs } from './plex/server.j
 import { bridgePairing, type BridgePairing } from './child-bridge.js';
 import { describe } from './errors.js';
 import { lanAddress } from './network.js';
+import { parseRecords, type PlayerRecords } from './players.js';
 import type { MediaFacts } from './plex/media-facts.js';
 import { configFingerprint } from './runtime.js';
 import { serverToken, type Credentials, type Storage } from './storage.js';
@@ -293,7 +294,22 @@ export class SetupService {
     }
     const credentials = await this.credentials();
     const targets = await Promise.all(servers.map(async (ref) => ({ id: ref.id, name: ref.name, server: await this.serverFor(ref, credentials) })));
-    return discover(targets, await this.plexTv(), credentials.accountToken);
+    const discovery = await discover(targets, await this.plexTv(), credentials.accountToken);
+    // Plex lists some apps without their name; Intermission learned it when they played.
+    const { seen } = await this.players();
+    for (const player of discovery.players) {
+      const known = seen[player.id];
+      if (known) {
+        player.product ??= known.product;
+        player.lastUsedAt = Math.max(player.lastUsedAt ?? 0, Date.parse(known.lastPlayedAt)) || player.lastUsedAt;
+      }
+    }
+    return discovery;
+  }
+
+  /** The players Intermission has seen play, and new player IDs it follows. */
+  async players(): Promise<PlayerRecords> {
+    return parseRecords(await this.options.storage.readPlayers().catch(() => undefined));
   }
 
   /** The address Plex should post webhooks to: an IPv4 address on the same network as the server. */

@@ -30,9 +30,11 @@ const allServers = [{ id: 'srv', name: 'Unraid', owned: true }, { id: 'cab', nam
 let config = { platform: 'PlexIntermission', name: 'Intermission' };
 if (['main', 'edit', 'advanced', 'recipes', 'review', 'ended', 'nopass-adv', 'commands', 'edit-cmd'].includes(scenario)) {
   config.servers = [{ id: 'srv', name: 'Unraid', url: 'http://10.0.0.2:32400' }, { id: 'cab', name: 'Cabin', url: 'http://10.0.1.2:32400' }];
-  config.selection = { players: [{ id: 'ATV', name: 'Living Room', product: 'Plex for Apple TV' }], allUsers: true, users: [], libraries: [
+  const tv = { id: 'd-tv', name: 'Living Room', match: 'Living Room' };
+  config.devices = [tv];
+  config.selection = { players: [], devices: [tv], exceptPlayers: [], allUsers: true, users: [], libraries: [
     { key: 'srv/1', title: 'Movies', kind: 'movie', serverId: 'srv', serverName: 'Unraid' }, { key: 'srv/2', title: 'TV Shows', kind: 'show', serverId: 'srv', serverName: 'Unraid' }] };
-  const f = () => ({ players: ['ATV'], users: [], libraries: ['srv/1', 'srv/2'] });
+  const f = () => ({ players: [], devices: ['d-tv'], exceptPlayers: [], users: [], libraries: ['srv/1', 'srv/2'] });
   config.sensors = [
     { id: 's-1', name: 'Media Playing', type: 'occupancy', state: 'playing', except: ['credits'], filters: f(), run: { on: ['c-1'], off: [], press: [] }, group: 'states:ab12' },
     { id: 's-3', name: 'Media Paused', type: 'occupancy', state: 'paused', except: ['credits'], filters: f(), group: 'states:ab12' },
@@ -49,6 +51,21 @@ const hook = { plexPass: true, port: 32550, portState: scenario === 'webhooks' ?
 // A second app on the same Apple TV, with the same name.
 if (qs.get('twin')) discovery.players.splice(1, 0, { id: '1AF4CEC1-CE71', name: 'Living Room', product: 'Infuse', platform: 'tvOS', plays: 2 });
 let liveCount = 0;
+const ago = (h) => new Date(Date.now() - h * 3600e3).toISOString();
+const seenPlayers = { seen: {}, followed: {}, sightings: {}, sharedNames: {} };
+if (qs.get('seen') === '1' || qs.get('seen') === 'followed') {
+  seenPlayers.seen.lcn8wszvp5by = { name: 'Living Room', product: 'Plex for Apple TV', address: '10.0.0.20', lastPlayedAt: ago(1) };
+  if (qs.get('seen') === 'followed') seenPlayers.followed.lcn8wszvp5by = ['ATV'];
+}
+if (qs.get('seen') === 'shared') {
+  Object.assign(seenPlayers.seen, {
+    ATV: { name: 'Living Room', product: 'Plex for Apple TV', platform: 'tvOS', address: '10.0.0.20', lastPlayedAt: ago(0) },
+    '1AF4CEC1-CE71': { name: 'Living Room', product: 'Infuse', platform: 'tvOS', address: '10.0.0.20', lastPlayedAt: ago(30) },
+    BEDROOMATV: { name: 'Living Room', product: 'Plex for Apple TV', platform: 'tvOS', address: '10.0.0.31', lastPlayedAt: ago(5) },
+  });
+  seenPlayers.sharedNames['living room'] = ago(5);
+  discovery.players[0].address = '10.0.0.20';
+}
 window.__liveCount = () => liveCount;
 if (qs.get('hook') === 'ok') Object.assign(hook, { registered: true, stale: [], disabledOn: [], serverSettings: [{ name: 'Unraid', enabled: true }] });
 const report = 'Intermission 0.1.0\nHomebridge UI 5.9.0, Docker, Node.js v24.3.0\n\nPlex account: Steve\nPlex Pass: yes\n\nServer: Unraid (http://10.0.0.2:32400)\n  Version: 1.41.6\n  Credits detection: as a scheduled task and when media is added\n  Webhooks setting: on\n  Library 1: Movies (movie, tv.plex.agents.movie)\n\nSensors: 4';
@@ -83,6 +100,7 @@ window.homebridge = {
       case '/reset': return { webhookRemoved: true };
       case '/webhook/remove': return { ...hook, registered: false, stale: [] };
       case '/plexpass/ack': return null;
+      case '/players/seen': return seenPlayers;
       case '/diagnostics/live': liveCount++; return [`2026-10-18T22:10:0${liveCount % 10}.000Z debug Poll ${liveCount}`, '2026-10-18T22:10:00.000Z info  Media Playing: on (Dune: Part Two, Living Room)'];
       case '/diagnostics': return `Intermission diagnostics\nCreated 2026-10-18T23:00:00.000Z. ${body.includeNames ? 'Titles and names are included.' : 'Titles, people, players and command lines are replaced with placeholders.'}\n\n== Setup ==\n${report}\n\n== Recent log ==\n2026-10-18T22:10:01.000Z info  Media Playing: on (${body.includeNames ? 'Dune: Part Two, Living Room' : 'Title 1, Player 1'})`;
       case '/commands/test': return { code: 0, output: 'OK: lens memory 2', timedOut: false };

@@ -15,7 +15,9 @@ Most Plex plugins give Apple Home a single "playing" sensor. Intermission adds:
 - **Credits timing.** Lights come up when Plex's credits markers say the credits start, never before, re-timed when you skip.
 - **A sensor for each moment.** Playing, paused, credits and nothing playing, so each gets its own scene.
 - **Instant, without polling.** Plex pushes every change, and it works without Plex Pass too.
-- **Sign in with Plex.** Players and libraries come from a list; no tokens or IDs to copy.
+- **Sign in with Plex.** Devices and libraries come from a list; no tokens or IDs to copy.
+- **Choose the device, not the app.** Pick the Apple TV in the room and every Plex app on it counts, including apps
+  added or reinstalled later. Leave out an app on it if you like.
 
 I build things I need for myself, and sometimes I share them. This [Homebridge](https://homebridge.io) plugin is one
 of those: I wanted the room to react to movie night using nothing but Apple Home.
@@ -29,7 +31,7 @@ Intermission never controls your lights; you choose what happens in the Home app
 - **Mid-credits scenes** can dim the lights again, and short pauses or skip bursts never flicker them.
 - **Sensors, not just buttons.** Home can always read a sensor, so a hub restart or a Wi-Fi drop never leaves your
   lights in the wrong state. Buttons cover one-off events such as "Marked as watched".
-- **Filters** by player, person and library (including Live TV), and by the media itself: wide movies, 4K, HDR,
+- **Filters** by device (or app), person and library (including Live TV), and by the media itself: wide movies, 4K, HDR,
   ratings or Plex labels.
 - **A Guide** in the settings page with the Home automations for your preset, including gentle fades, with screenshots.
 - **Diagnostics** in one file for bug reports, never with your Plex sign-in, and without titles or names unless you
@@ -50,7 +52,7 @@ fades made with Convert To Shortcut.
 
 1. In the Homebridge UI, open **Plugins**, search for **Intermission for Plex** and install it.
 2. Open the plugin's settings and **Sign in with Plex**.
-3. Choose your servers, then your players, people and libraries.
+3. Choose your servers, then your devices, people and libraries.
 4. Choose a preset and save. Intermission runs on its own child bridge by default; restart Homebridge, then add it in
    the Home app with the code shown on the Sensors tab.
 5. Make the automations from the Guide tab.
@@ -96,6 +98,9 @@ Intermission talks only to plex.tv and your Plex servers, with no analytics. See
   Intermission makes of something as you do it, press **Watch live** there instead.
 - **Webhooks:** **Settings**, then **Plex Pass and webhooks**, shows whether Plex has the webhook, whether your server's
   Webhooks setting is on, and whether Intermission is listening on its port.
+- **A device's playback is ignored:** a device counts while it plays on your home network. Diagnostics, Network check
+  says whether Plex reports real addresses and marks your players local. Apps report the device's model name ("Apple
+  TV"), so two Apple TVs share one; Intermission notices and setup offers **This one** to keep only the one in the room.
 - **Sensors not in the Home app:** with the child bridge, add Intermission in the Home app with the code on the Sensors
   tab after restarting Homebridge.
 

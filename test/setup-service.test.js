@@ -224,8 +224,12 @@ test('diagnostics: setup, sensors and the kept log, without secrets, with names 
     sensors: [{ id: 's', name: 'Media Playing', type: 'occupancy', state: 'playing', except: ['credits'], filters: { players: ['ATV'], users: ['Jen'], libraries: ['srv/1'] }, run: { on: ['c'] } }],
     commands: { enabled: true, list: [{ id: 'c', name: 'Projector Control', command: 'curl http://10.0.0.9/?key=topsecretkey' }] },
   };
+  await storage.writePlayers({ seen: { 'lcn8wszvp5by': { name: 'Living Room', product: 'Plex for Apple TV', address: '10.0.0.20', lastPlayedAt: '2026-11-07T02:13:39Z' } }, followed: { 'lcn8wszvp5by': ['ATV'] } });
   const text = await diagnosticsReport(service, { config, servers }, new Date());
   assert.match(text, /== Sensors ==/);
+  assert.match(text, /Player 1 \(Plex for Apple TV, lcn8wszv\): last played 2026-11-07T02:13:39Z, private address, followed as ATV/);
+  assert.match(text, /== Network check ==\nPlayers' addresses look real \(1 distinct\)/);
+  assert.doesNotMatch(text, /10\.0\.0\.20/, 'addresses are not listed');
   assert.match(text, /players: Player 1 \(ATV\)/, 'the start of the ID tells apart players with the same name');
   assert.match(text, /people: Person \d/);
   assert.match(text, /libraries: Movies/);

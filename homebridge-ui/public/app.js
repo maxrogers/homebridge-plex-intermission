@@ -4,7 +4,7 @@ import {
   CONDITIONS, DEFAULT_WEBHOOK_PORT, EVENTS, EXCEPTIONS, CAN_EXCEPT, CREDITS_MODES, LIBRARY_KINDS, PLATFORM, PRESETS, DEFAULT_PRESET, SENSOR_TYPES, TIMING_FIELDS,
   SHAPES, RESOLUTIONS, DYNAMIC_RANGES, RATINGS,
   applyPreset, defaultSelection, creditsMode, describeFacts, groupIntact, groupPreset, hasMediaConditions, homeKitName, libraryRef, needsPlexPass, presetSensors, sensorId, usesCredits,
-  reconcileSelection, reconcileSensors, followSelection, missingSetupPlayers, playerLabel, newChildBridge, newSensor, playerRef, setTiming, summarize, timingValue,
+  reconcileSelection, reconcileSensors, followSelection, missingSetupPlayers, playerLabel, newPlayerIds, addPlayerId, deviceGroups, deviceFor, newDevice, mergeDevices, usedDevices, appOnDevice, migrateToDevices, newChildBridge, newSensor, playerRef, setTiming, summarize, timingValue,
 } from './model.js';
 
 const root = document.getElementById('intermission');
@@ -174,8 +174,81 @@ async function loadMain() {
       // The board still works from the saved choices.
     }
   }
-  await Promise.all([refreshWebhook(), refreshPairing()]);
+  await Promise.all([refreshWebhook(), refreshPairing(), refreshPlayers()]);
+  const moved = migrateToDevices(state.config, knownPlayers());
+  if (moved) {
+    state.config = moved;
+    state.migrated = true;
+    await saveConfig();
+  }
   render();
+}
+
+/** Every player the page knows: found on Plex, seen playing by the plugin, or saved in the choices. */
+function knownPlayers() {
+  const byId = new Map();
+  for (const p of selection().players ?? []) {
+    byId.set(p.id, p);
+  }
+  for (const [id, seen] of Object.entries(state.seenPlayers?.seen ?? {})) {
+    byId.set(id, { id, name: seen.name ?? id, product: seen.product, platform: seen.platform, address: seen.address, lastUsedAt: Date.parse(seen.lastPlayedAt), ...byId.get(id) });
+  }
+  for (const p of state.discovery?.players ?? []) {
+    byId.set(p.id, { ...byId.get(p.id), ...p, product: p.product ?? byId.get(p.id)?.product });
+  }
+  return [...byId.values()];
+}
+
+/** What sensor summaries need to name devices and apps. */
+const summaryContext = (sel) => ({ ...sel, libraries: knownLibraries(), devices: state.config.devices ?? [], known: knownPlayers() });
+
+/** Shown once after choices made app by app are moved to devices. */
+function migratedNotice() {
+  if (!state.migrated) {
+    return '';
+  }
+  return `<div class="im-card im-banner mb-3" id="im-migrated"><strong>Players are now chosen by device</strong>
+    <p class="small mb-2 mt-1">Every app on a chosen device now counts, including apps added or reinstalled later, as long as it plays on your home network. Apps you hadn't chosen before are left out, so nothing new changes the lights. Press Save to keep this.</p>
+    <button class="btn btn-sm btn-outline-secondary" data-action="dismiss-migrated">OK</button></div>`;
+}
+
+/** What Intermission learned about players as they played; used to point out new player IDs. */
+async function refreshPlayers() {
+  try {
+    state.seenPlayers = await request('/players/seen', {});
+  } catch {
+    state.seenPlayers = undefined;
+  }
+}
+
+/** Offers to add a player that Plex gave a new ID (after reinstalling the app, say) to the sensors. */
+function newPlayerNotice() {
+  const found = newPlayerIds(state.seenPlayers, selection(), state.config.sensors, { devices: state.config.devices ?? [] });
+  if (found.length === 0) {
+    return '';
+  }
+  const sel = selection();
+  const rows = found.map((p) => {
+    const was = p.targets.map((id) => {
+      const chosen = sel.players.find((c) => c.id === id);
+      return chosen ? playerLabel(chosen, [...sel.players, { id: p.id, name: p.name }]) : id;
+    }).join(', ');
+    const when = new Date(p.lastPlayedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    return `<div class="im-newplayer">
+      <p class="small mb-2 mt-1"><strong>${escape(p.name)}${p.product ? ` (${escape(p.product)})` : ''}</strong>, ID ${escape(p.id.slice(0, 8))}, played ${escape(when)}.
+        ${p.followed
+          ? `It has the same name, app and address as ${escape(was)}, so the sensors already follow it.`
+          : `No sensor watches it, but it has the same name as ${escape(was)}.`}</p>
+      <div class="d-flex flex-wrap gap-2">
+        <button class="btn btn-sm btn-im" data-action="add-new-player" data-id="${escape(p.id)}">Add to the sensors</button>
+        <button class="btn btn-sm btn-outline-secondary" data-action="dismiss-new-player" data-id="${escape(p.id)}">${p.followed ? 'Stop following it' : 'Leave it off'}</button>
+      </div></div>`;
+  }).join('');
+  return `<div class="im-card im-banner mb-3" id="im-new-players">
+    <strong>${found.length === 1 ? 'A player may have a new Plex ID' : 'Players may have new Plex IDs'}</strong>
+    <p class="small mb-0 mt-1">Plex gives an app a new ID when it's reinstalled or signed in again, and sensors watch players by ID.</p>
+    ${rows}
+  </div>`;
 }
 
 /** Reads the child bridge's pairing state, so the page can show its code until it's in the Home app. */
@@ -361,6 +434,7 @@ async function finishSetup() {
     state.setupServers = undefined;
   }
   state.config.selection = state.selection;
+  state.config.devices = mergeDevices(state.config.devices, state.selection.devices ?? []);
   if (offerChildBridge() && state.useChildBridge) {
     state.config._bridge = newChildBridge();
   }
@@ -368,6 +442,7 @@ async function finishSetup() {
     state.config.sensors = presetSensors(state.template, state.selection);
     state.config.preset = state.template;
   }
+  state.config.devices = usedDevices(state.config);
   await busy('Saving…', () => saveConfig({ persist: true }));
   if (!state.error) {
     homebridge.toast.success('Restart Homebridge (or this plugin\'s child bridge) to add the sensors to Apple Home.', 'Saved');
@@ -489,22 +564,55 @@ function choose() {
   }
   const sel = state.selection;
   const allPlayers = `<button class="im-pick" data-action="players-all" ${pressed(sel.allPlayers)}>
-      ${DEVICE_ICONS.default.svg}<strong>All players</strong><small>Any device on your account</small></button>`;
-  const players = allPlayers + state.discovery.players.map((p) => `<button class="im-pick" data-action="toggle-player" data-id="${escape(p.id)}" ${pressed(!sel.allPlayers && sel.players.some((s) => s.id === p.id))}>
-      ${deviceIcon(p)}<strong>${escape(p.name)}</strong>
-      <small>${escape([p.product, p.plays ? `${p.plays} ${p.plays === 1 ? 'play' : 'plays'}` : ''].filter(Boolean).join(' · '))}</small>
-      ${p.playingNow ? '<span class="im-live">● Playing now</span>' : ''}
+      ${DEVICE_ICONS.default.svg}<strong>All players</strong><small>Any device, at home or away</small></button>`;
+  const groups = deviceGroups(state.discovery.players);
+  const chosen = (g) => !sel.allPlayers && (sel.devices ?? []).some((d) => g.apps.some((a) => appOnDevice(d, a)));
+  const players = allPlayers + groups.map((g) => `<button class="im-pick" data-action="toggle-device" data-id="${escape(g.match)}" ${pressed(chosen(g))}>
+      ${deviceIcon(g.apps[0])}<strong>${escape(g.match)}</strong>
+      <small>${escape([g.apps.length === 1 ? (g.apps[0].product ?? '1 app') : `${g.apps.length} apps`, g.plays ? `${g.plays} ${g.plays === 1 ? 'play' : 'plays'}` : ''].filter(Boolean).join(' · '))}</small>
+      ${g.playingNow ? '<span class="im-live">● Playing now</span>' : ''}
     </button>`).join('');
+  const panels = sel.allPlayers ? '' : (sel.devices ?? []).map((d) => devicePanel(d, sel)).join('');
   return `${stepHeader(3, 'Choose what Intermission watches')}${notices()}
-    ${section('Players', 'The players in the room with the lights. Most used first. Choose at least one, or All players.',
-      `<div class="im-grid">${players || '<p class="im-muted">No players found yet. Play something on the TV, then Refresh.</p>'}</div>`)}
+    ${section('Players', 'The devices in the room with the lights, such as the Apple TV. Any Plex app on a chosen device counts while it plays on your home network, including apps added later. Most used first.',
+      `<div class="im-grid">${players || '<p class="im-muted">No players found yet. Play something on the TV, then Refresh.</p>'}</div>${panels}`)}
     ${section('People', 'Whose playback should change the lights.', peoplePicker(sel))}
     ${section('Libraries', 'Movies and TV Shows are chosen for you. They get credits and intro handling; other libraries and Live TV just follow play, pause and stop.', libraryPicker(sel))}
     <div class="d-flex gap-2">
-      <button class="btn btn-im" data-action="to-template" ${(sel.allUsers === false && sel.users.length === 0) || (!sel.allPlayers && sel.players.length === 0) || (!sel.allLibraries && sel.libraries.length === 0) ? 'disabled' : ''}>Next</button>
+      <button class="btn btn-im" data-action="to-template" ${(sel.allUsers === false && sel.users.length === 0) || (!sel.allPlayers && sel.players.length === 0 && (sel.devices ?? []).length === 0) || (!sel.allLibraries && sel.libraries.length === 0) ? 'disabled' : ''}>Next</button>
       <button class="btn btn-outline-secondary" data-action="refresh-choose">Refresh</button>
       ${cancelSetup()}
     </div>`;
+}
+
+/** Under a chosen device: its apps (all included unless unticked), its name here, and the same-name split. */
+function devicePanel(device, sel) {
+  const apps = knownPlayers().filter((p) => appOnDevice(device, p));
+  const except = sel.exceptPlayers ?? [];
+  const included = apps.filter((a) => !except.includes(a.id)).length;
+  const open = state.openApps?.[device.id] ?? false;
+  const shared = Boolean(state.seenPlayers?.sharedNames?.[device.match.trim().toLowerCase()]) && !(device.apps?.length);
+  const playing = apps.filter((a) => a.playingNow);
+  const when = (a) => (a.playingNow ? 'playing now' : a.lastUsedAt ? `last ${new Date(a.lastUsedAt).toLocaleDateString([], { month: 'short', day: 'numeric' })}` : '');
+  const rows = apps.map((a) => `<label class="im-row">
+      <input type="checkbox" class="form-check-input" data-device-app="${escape(a.id)}" ${except.includes(a.id) ? '' : 'checked'}>
+      <span class="im-row-text">${escape(a.product ?? 'App')} <small class="im-muted">${escape([when(a), `ID ${a.id.slice(0, 8)}`].filter(Boolean).join(' · '))}</small></span>
+    </label>`).join('');
+  return `<div class="im-card im-device mt-2" data-device="${escape(device.id)}">
+    <div class="d-flex align-items-center gap-2 flex-wrap">
+      <strong>${escape(device.name)}</strong>
+      <span class="im-muted small">${device.apps?.length ? `only the apps on this one (${device.apps.length})` : included === apps.length ? `all apps${apps.length ? ` (${apps.length} so far)` : ''}` : `${included} of ${apps.length} apps`}</span>
+      <button class="btn btn-sm im-link ms-auto" data-action="device-apps" data-id="${escape(device.id)}" aria-expanded="${open}">${open ? 'Done' : 'Choose apps'}</button>
+    </div>
+    ${shared ? `<div class="im-alert im-alert-warn small mt-2 mb-0" id="im-shared-name">Two devices report the name "${escape(device.match)}", so both change these lights.
+      To limit it to the one in this room, start something on it, then press This one.
+      <div class="mt-2"><button class="btn btn-sm btn-outline-secondary" data-action="this-one" data-id="${escape(device.id)}" ${playing.length ? '' : 'disabled'}>This one</button>
+      ${playing.length ? '' : '<span class="im-muted">Waiting for playback… press Refresh once it plays.</span>'}</div></div>` : ''}
+    ${open ? `<p class="im-hint mt-2 mb-1">Every app on this device counts, including apps added or reinstalled later. Untick an app only if playback in it shouldn't change the lights, such as a kids' app or one you use for music.</p>
+      <div class="im-rows">${rows || '<p class="im-muted small">No apps seen yet.</p>'}</div>
+      <label class="im-label" for="im-dev-${escape(device.id)}">Name shown here</label>
+      <input id="im-dev-${escape(device.id)}" class="form-control form-control-sm" data-device-label="${escape(device.id)}" value="${escape(device.name)}" maxlength="40">` : ''}
+  </div>`;
 }
 
 function peoplePicker(sel) {
@@ -642,7 +750,7 @@ function sensorCard(sensor, index, sel) {
         <strong>${escape(sensor.name)}</strong><span class="im-muted small ms-2">${escape(type.label)}</span>${badge}
         <span class="ms-auto"><button class="btn btn-sm im-link" data-action="edit" data-id="${escape(sensor.id)}">${open ? 'Done' : 'Edit'}</button></span>
       </div>
-      <div class="im-summary">${escape(summarize(sensor, { ...sel, libraries: knownLibraries() }))}</div>
+      <div class="im-summary">${escape(summarize(sensor, summaryContext(sel)))}</div>
       ${open ? editor(sensor, sel) : ''}
     </div>
   </div>`;
@@ -674,7 +782,7 @@ function sensorsTab() {
       ${members.map(([s, i]) => sensorCard(s, i, sel)).join('')}
     </div>`);
   });
-  return `${pairingCard()}${webhookNotice()}${missingPlayersNotice()}
+  return `${pairingCard()}${migratedNotice()}${webhookNotice()}${newPlayerNotice()}${missingPlayersNotice()}
     ${parts.join('') || '<p class="im-muted">No sensors yet. Add a preset, or a sensor of your own.</p>'}
     <div class="d-flex flex-wrap gap-2 mt-2">
       <button class="btn btn-im" data-action="add" data-type="occupancy">Add sensor</button>
@@ -688,11 +796,11 @@ function sensorsTab() {
 /** Offers to add players chosen in setup that sensors leave out, such as a second app on the same Apple TV. */
 function missingPlayersNotice() {
   const sel = selection();
-  const { players, sensorIds } = missingSetupPlayers(state.config.sensors, sel);
+  const { players, sensorIds } = missingSetupPlayers(state.config.sensors, sel, knownPlayers());
   if (players.length === 0) {
     return '';
   }
-  const names = players.map((p) => playerLabel(p, sel.players)).join(', ');
+  const names = players.map((p) => playerLabel(p, knownPlayers())).join(', ');
   const count = sensorIds.length;
   return `<div class="im-card im-banner mb-3" id="im-missing-players">
     <strong>${players.length === 1 ? 'A player you chose is' : 'Players you chose are'} not on ${count === 1 ? '1 sensor' : `${count} sensors`}</strong>
@@ -775,7 +883,10 @@ function editor(sensor, sel) {
         (e) => `${EVENTS[e].label}${EVENTS[e].plexPass ? ' ★' : ''}`, (e) => noPass && EVENTS[e].plexPass)}</div>
         <div class="im-hint">★ needs Plex Pass</div>`}
     <label class="im-label">Players</label>
-    ${filter('players', players, (p) => playerLabel(p, players), 'All players')}
+    ${deviceFilter(sensor)}
+    ${sensor.filters.players.length ? `<label class="im-label">Apps chosen one by one</label>
+      <div class="im-chips">${chips('toggle-filter-players', players.filter((p) => sensor.filters.players.includes(p.id)), sensor.filters.players, (p) => playerLabel(p, players))}</div>
+      <p class="im-hint">Tap one to remove it. Choose its device above instead, so new apps on it count too.</p>` : ''}
     <label class="im-label">People</label>
     ${filter('users', users, (u) => u, 'All Plex Home users')}
     <label class="im-label">Libraries</label>
@@ -788,6 +899,26 @@ function editor(sensor, sel) {
       ${confirming ? '<button class="btn btn-sm btn-outline-secondary" data-action="cancel-confirm">Keep it</button>' : ''}
     </div>
   </div>`;
+}
+
+/** The editor's device chips, with each chosen device's apps (tap to leave one out). */
+function deviceFilter(sensor) {
+  const f = { devices: [], exceptPlayers: [], ...sensor.filters };
+  const devices = state.config.devices ?? [];
+  const known = knownPlayers();
+  const options = [
+    ...devices.map((d) => ({ key: `dev:${d.id}`, label: d.name, on: f.devices.includes(d.id) })),
+    ...deviceGroups(known).filter((g) => !deviceFor(devices, g.match)).map((g) => ({ key: `new:${g.match}`, label: g.match, on: false })),
+  ];
+  const all = f.devices.length === 0 && f.players.length === 0;
+  const chips = options.map((o) => `<button class="im-chip" data-action="toggle-filter-device" data-id="${escape(o.key)}" ${pressed(o.on)}>${escape(o.label)}</button>`).join('');
+  const apps = f.devices.map((id) => devices.find((d) => d.id === id)).filter(Boolean).map((d) => {
+    const on = known.filter((p) => appOnDevice(d, p));
+    return on.length > 1 || f.exceptPlayers.some((id) => on.some((p) => p.id === id))
+      ? `<div class="im-subchips"><small class="im-muted">Apps on ${escape(d.name)}:</small> ${on.map((p) => `<button class="im-chip im-chip-sm" data-action="toggle-filter-app" data-id="${escape(p.id)}" ${pressed(!f.exceptPlayers.includes(p.id))}>${escape(p.product ?? `ID ${p.id.slice(0, 8)}`)}</button>`).join('')}</div>`
+      : '';
+  }).join('');
+  return `<div class="im-chips"><button class="im-chip im-all" data-action="filter-all" data-id="devices" ${pressed(all)}>All players</button>${chips}</div>${apps}`;
 }
 
 /** What counts as the credits, shown where a sensor depends on it. One setting for every sensor. */
@@ -1037,7 +1168,7 @@ function advancedTab() {
       <strong>Your setup</strong>
       <dl class="im-facts">
         <dt>Plex servers</dt><dd>${escape(servers().map((s) => s.name).join(', ') || 'None')}</dd>
-        <dt>Players</dt><dd>${escape(sel.allPlayers ? 'All players' : sel.players.map((p) => playerLabel(p, sel.players)).join(', ') || 'None')}</dd>
+        <dt>Players</dt><dd>${escape(sel.allPlayers ? 'All players' : [...(sel.devices ?? []).map((d) => d.name), ...sel.players.map((p) => playerLabel(p, sel.players))].join(', ') || 'None')}</dd>
         <dt>People</dt><dd>${escape(sel.allUsers === false ? sel.users.join(', ') : 'All Plex Home users')}</dd>
         <dt>Libraries</dt><dd>${escape(libraryNames)}</dd>
         <dt>Bridge</dt><dd>${state.config._bridge ? `Intermission's own bridge${state.pairing?.paired ? ', in the Home app' : ''}` : 'Main Homebridge bridge'}</dd>
@@ -1446,15 +1577,28 @@ const actions = {
   'cancel-confirm': () => { state.confirming = undefined; render(); },
   'add-missing-players': () => {
     const sel = selection();
-    const { players, sensorIds } = missingSetupPlayers(state.config.sensors, sel);
+    const { players, sensorIds, leftOut } = missingSetupPlayers(state.config.sensors, sel, knownPlayers());
+    const ids = players.map((p) => p.id);
     state.config.sensors = state.config.sensors.map((s) => (sensorIds.includes(s.id)
-      ? { ...s, filters: { ...s.filters, players: [...new Set([...s.filters.players, ...players.map((p) => p.id)])] } }
+      ? { ...s, filters: { ...s.filters, players: leftOut ? s.filters.players : [...new Set([...s.filters.players, ...ids])], exceptPlayers: (s.filters.exceptPlayers ?? []).filter((id) => !ids.includes(id)) } }
       : s));
+    return changed();
+  },
+  'add-new-player': (el) => {
+    const player = newPlayerIds(state.seenPlayers, selection(), state.config.sensors, { devices: state.config.devices ?? [] }).find((p) => p.id === el.dataset.id);
+    if (player) {
+      state.config = addPlayerId(state.config, player);
+    }
+    return changed();
+  },
+  'dismiss-new-player': (el) => {
+    const sel = selection();
+    state.config.selection = { ...sel, dismissedPlayers: [...new Set([...(sel.dismissedPlayers ?? []), el.dataset.id])] };
     return changed();
   },
   'dismiss-missing-players': () => {
     const sel = selection();
-    const { players } = missingSetupPlayers(state.config.sensors, sel);
+    const { players } = missingSetupPlayers(state.config.sensors, sel, knownPlayers());
     state.config.selection = { ...sel, dismissedPlayers: [...new Set([...(sel.dismissedPlayers ?? []), ...players.map((p) => p.id)])] };
     return changed();
   },
@@ -1570,9 +1714,63 @@ const actions = {
     go('main');
     void loadMain();
   },
-  'players-all': () => { state.selection.allPlayers = true; state.selection.players = []; render(); },
+  'players-all': () => { Object.assign(state.selection, { allPlayers: true, players: [], devices: [], exceptPlayers: [] }); render(); },
+  'toggle-device': (el) => {
+    const sel = state.selection;
+    const group = deviceGroups(state.discovery.players).find((g) => g.match === el.dataset.id);
+    const on = (sel.devices ?? []).filter((d) => group.apps.some((a) => appOnDevice(d, a)));
+    sel.allPlayers = false;
+    if (on.length > 0) {
+      sel.devices = sel.devices.filter((d) => !on.includes(d));
+    } else {
+      sel.devices = [...(sel.devices ?? []), deviceFor(state.config.devices, group.match) ?? newDevice(group.match)];
+    }
+    render();
+  },
+  'device-apps': (el) => { state.openApps = { ...state.openApps, [el.dataset.id]: !(state.openApps?.[el.dataset.id]) }; render(); },
+  'this-one': (el) => {
+    const sel = state.selection;
+    const device = sel.devices.find((d) => d.id === el.dataset.id);
+    const apps = knownPlayers().filter((p) => appOnDevice(device, p));
+    const here = apps.find((a) => a.playingNow);
+    // Apps last seen at the same address are on the same device.
+    const pinned = apps.filter((a) => a.id === here.id || (here.address && a.address === here.address)).map((a) => a.id);
+    sel.devices = sel.devices.map((d) => (d.id === device.id ? { ...d, id: newDevice(d.match).id, apps: pinned } : d));
+    state.openApps = { ...state.openApps, [sel.devices.find((d) => d.apps?.length && d.match === device.match).id]: true };
+    homebridge.toast.success('Only this device counts now. Give it a name below.', device.match);
+    render();
+  },
+  'dismiss-migrated': () => { state.migrated = false; render(); },
+  'toggle-filter-device': (el) => {
+    const sensor = editingSensor();
+    const f = sensor.filters;
+    f.devices ??= [];
+    const [kind, value] = [el.dataset.id.slice(0, 4), el.dataset.id.slice(4)];
+    let id = value;
+    if (kind === 'new:') {
+      const device = deviceFor(state.config.devices, value) ?? newDevice(value);
+      state.config.devices = mergeDevices(state.config.devices, [device]);
+      id = device.id;
+    }
+    f.devices = f.devices.includes(id) ? f.devices.filter((d) => d !== id) : [...f.devices, id];
+    return changed();
+  },
+  'toggle-filter-app': (el) => {
+    const f = editingSensor().filters;
+    f.exceptPlayers ??= [];
+    toggle(f.exceptPlayers, el.dataset.id);
+    return changed();
+  },
   'libraries-all': () => { state.selection.allLibraries = true; state.selection.libraries = []; render(); },
-  'filter-all': (el) => { editingSensor().filters[el.dataset.id] = []; return changed(); },
+  'filter-all': (el) => {
+    const f = editingSensor().filters;
+    if (el.dataset.id === 'devices') {
+      Object.assign(f, { players: [], devices: [], exceptPlayers: [] });
+    } else {
+      f[el.dataset.id] = [];
+    }
+    return changed();
+  },
   'set-type': (el) => { setType(editingSensor(), el.dataset.id); return changed(); },
   'remove-webhook': () => confirmThen('remove-webhook', () => busy('Removing the webhook…', async () => {
     state.webhook = await request('/webhook/remove', webhookBody());
@@ -1682,6 +1880,20 @@ root.addEventListener('change', (event) => {
   const el = event.target;
   if (el.dataset.user !== undefined) {
     toggle(state.selection.users, el.dataset.user);
+    render();
+    return;
+  }
+  if (el.dataset.deviceApp !== undefined) {
+    state.selection.exceptPlayers ??= [];
+    toggle(state.selection.exceptPlayers, el.dataset.deviceApp);
+    render();
+    return;
+  }
+  if (el.dataset.deviceLabel !== undefined) {
+    const name = el.value.trim();
+    if (name) {
+      state.selection.devices = state.selection.devices.map((d) => (d.id === el.dataset.deviceLabel ? { ...d, name } : d));
+    }
     render();
     return;
   }

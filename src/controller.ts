@@ -10,7 +10,8 @@ import { PlexHttpError } from './plex/server.js';
 import type { MediaFacts } from './plex/media-facts.js';
 import { person as markPerson, player as markPlayer, title as markTitle } from './diagnostics.js';
 import { describe } from './errors.js';
-import { contextOf, filterMismatch, matchesFilters, mediaMatches, mediaMismatch, stateHolds, type MatchContext } from './sensors/rules.js';
+import type { PlayerBook } from './players.js';
+import { contextOf, filterMismatch, isHome, matchesFilters, onDevice, mediaMatches, mediaMismatch, stateHolds, type MatchContext } from './sensors/rules.js';
 
 /** The parts of PlexServer the controller uses. */
 export interface ServerApi {
@@ -62,6 +63,8 @@ export interface ControllerOptions {
   sensors: readonly SensorOutput[];
   /** Called once when Plex rejects the saved sign-in. */
   onUnauthorized?(): void;
+  /** Remembers players as they play, and follows a chosen player that Plex gives a new ID. */
+  players?: PlayerBook;
 }
 
 const WEBHOOK_ONLY = new Set<string>(WEBHOOK_EVENTS);
@@ -91,6 +94,14 @@ export class Controller {
   /** Media details by rating key: a value once read, or null while reading or when Plex had none. */
   private readonly facts = new Map<string, MediaFacts | null>();
   private readonly needsFacts: boolean;
+  /** Every player some sensor is limited to. Empty when every sensor takes all players. */
+  private readonly chosenPlayers: ReadonlySet<string>;
+  /** Apps pinned to devices that share their name with another device. */
+  private readonly pinnedApps: ReadonlySet<string>;
+  /** Player names chosen as devices (lower case). */
+  private readonly deviceNames: ReadonlySet<string>;
+  /** Unwatched players already pointed out in the log this run. */
+  private readonly pointedOut = new Set<string>();
 
   constructor(private readonly options: ControllerOptions) {
     this.engine = new PlaybackEngine({
@@ -101,6 +112,10 @@ export class Controller {
       hasCredits: options.hasCredits,
     }, options.config.engine);
 
+    const devices = options.sensors.flatMap((s) => s.config.filters.devices ?? []);
+    this.pinnedApps = new Set(devices.flatMap((d) => d.apps));
+    this.chosenPlayers = new Set([...options.sensors.flatMap((s) => s.config.filters.players), ...this.pinnedApps]);
+    this.deviceNames = new Set(devices.filter((d) => d.apps.length === 0 && d.match).map((d) => d.match!.trim().toLowerCase()));
     this.needsFacts = options.getFacts !== undefined && options.sensors.some((s) => s.config.type !== 'button' && hasMediaConditions(s.config.media));
     this.engine.on('event', (event) => this.onEngineEvent(event));
     options.stream.on('playing', (notification) => this.engine.handleNotification(notification));
@@ -199,6 +214,7 @@ export class Controller {
       markPlayer(event.session.playerTitle ?? event.playerId), Math.round(event.positionMs / 1000));
     if (event.type === 'play') {
       this.explainSensors(event.session);
+      void this.learnPlayer(event.session);
     }
     // States first: a button press is delivered to the hub at once and flushes queued state changes
     // with it, so a shortcut started by the press already sees the new states.
@@ -207,7 +223,7 @@ export class Controller {
     } else {
       this.becomeReady();
     }
-    this.pressButtons(event.type, contextOf(event.session, undefined, this.options.server.id), event.session);
+    this.pressButtons(event.type, this.context(event.session), event.session);
     if (!this.options.stream.isConnected) {
       this.scheduleResync();
     }
@@ -233,7 +249,7 @@ export class Controller {
   }
 
   private webhookContext(webhook: WebhookEvent): MatchContext {
-    const context = contextOf(webhook.session, webhook.media, this.options.server.id);
+    const context = this.context(webhook.session, webhook.media);
     return { ...context, user: context.user ?? webhook.user };
   }
 
@@ -259,7 +275,7 @@ export class Controller {
         continue;
       }
       const matching = snapshots.filter((snapshot) => snapshot.session !== undefined
-        && matchesFilters(sensor.config.filters, contextOf(snapshot.session, undefined, this.options.server.id))
+        && matchesFilters(sensor.config.filters, this.context(snapshot.session))
         && (!hasMediaConditions(sensor.config.media) || mediaMatches(sensor.config.media, this.factsFor(snapshot.session.media))));
       // "Nothing playing" is on while no matching player is busy; the rest are on while any player meets them.
       const holding = matching.find((snapshot) => stateHolds(condition, snapshot, sensor.config.except));
@@ -310,7 +326,7 @@ export class Controller {
    * Logged when an item starts, and again for media conditions once the item's details are read.
    */
   private explainSensors(session: SessionInfo, mediaOnly = false): void {
-    const context = contextOf(session, undefined, this.options.server.id);
+    const context = this.context(session);
     for (const sensor of this.options.sensors) {
       const config = sensor.config;
       if (config.type === 'button' || (mediaOnly && !hasMediaConditions(config.media))) {
@@ -320,6 +336,74 @@ export class Controller {
         ?? (hasMediaConditions(config.media) ? mediaMismatch(config.media, this.factsFor(session.media)) : undefined);
       this.options.log.debug('  %s: %s', config.name, reason ? `ignores this playback: ${reason}` : 'follows this playback');
     }
+  }
+
+  /** What sensor filters match against, with the chosen players a new player ID is followed as. */
+  private context(session: SessionInfo | undefined, media?: SessionInfo['media']): MatchContext {
+    const id = session?.playerId;
+    const book = this.options.players;
+    const known = id ? book?.get(id) : undefined;
+    return contextOf(session, media, this.options.server.id, {
+      followedAs: id && !this.options.config.ignoredPlayers.includes(id) ? book?.followedAs(id) : undefined,
+      playerName: session?.playerTitle ?? known?.name,
+      home: isHome(session) ?? isHome(known),
+    });
+  }
+
+  /**
+   * Records a player that started playing, with its LAN address from the server's session list.
+   * A new Plex ID that matches a chosen app is followed as it (see PlayerBook); one that only looks
+   * like a chosen app, and a name that turns out to belong to two devices, are pointed out once.
+   */
+  private async learnPlayer(session: SessionInfo): Promise<void> {
+    const { players: book, log, config } = this.options;
+    if (!book) {
+      return;
+    }
+    const listed = session.address ? undefined : await this.call(() => this.options.plex.session(session.playerId, ''), undefined);
+    const player: SessionInfo = {
+      ...session,
+      playerTitle: session.playerTitle ?? listed?.playerTitle,
+      product: session.product ?? listed?.product,
+      platform: session.platform ?? listed?.platform,
+      address: session.address ?? listed?.address,
+      local: session.local ?? listed?.local,
+    };
+    const id = player.playerId;
+    const { followed, newlyShared } = book.record(player, this.chosenPlayers, { ignored: config.ignoredPlayers, pinned: this.pinnedApps });
+    const label = `${markPlayer(player.playerTitle ?? id)} (${[player.product, id.slice(0, 8)].filter(Boolean).join(', ')})`;
+    // What was unknown when play started (the name or whether it is at home) may be known now.
+    this.refreshStates();
+    if (newlyShared && this.deviceNames.has((player.playerTitle ?? '').trim().toLowerCase())) {
+      log.warn('Two devices report the player name %s: it played from one address, then another, then the first again. '
+        + 'Both change the lights. To limit it to one, open the plugin settings and choose This one on that device.', markPlayer(player.playerTitle));
+    }
+    if (followed.length > 0) {
+      log.info('%s has a new Plex ID. It has the same name and address as a chosen app, so the sensors follow it. '
+        + 'To make this permanent, open the plugin settings and add it to the sensors.', label);
+      this.explainSensors(player);
+      return;
+    }
+    if (this.chosenPlayers.size === 0 || this.chosenPlayers.has(id) || this.context(player).followedAs
+      || config.ignoredPlayers.includes(id) || this.pointedOut.has(id) || this.onAnyDevice(player)) {
+      return;
+    }
+    const lookalike = [...this.chosenPlayers].some((chosenId) => {
+      const known = { ...config.chosenPlayers[chosenId], ...book.get(chosenId) };
+      return sameText(known.name, player.playerTitle)
+        && (this.pinnedApps.has(chosenId) || !known.product || !player.product || sameText(known.product, player.product));
+    });
+    if (lookalike) {
+      this.pointedOut.add(id);
+      log.warn('%s is playing, but no sensor watches it, though a chosen player has the same name. If Plex gave that player '
+        + 'a new ID (after reinstalling or signing in to the app again), open the plugin settings and add it to the sensors.', label);
+    }
+  }
+
+  /** Whether any sensor's devices include this player, by name on the home network. */
+  private onAnyDevice(session: SessionInfo): boolean {
+    const context = this.context(session);
+    return this.options.sensors.some((s) => (s.config.filters.devices ?? []).some((device) => onDevice(device, context)));
   }
 
   private scheduleResync(): void {
@@ -366,3 +450,5 @@ export class Controller {
     this.options.log.warn('%s: %s', context, describe(error));
   }
 }
+
+const sameText = (a?: string, b?: string) => a !== undefined && b !== undefined && a.trim().toLowerCase() === b.trim().toLowerCase();

@@ -42,6 +42,7 @@ const FILES = {
   state: 'state.json',
   plexPass: 'plex-pass.json',
   running: 'running.json',
+  players: 'players.json',
 } as const;
 
 /**
@@ -121,6 +122,15 @@ export class Storage {
     return value && typeof value.fingerprint === 'string' && typeof value.startedAt === 'string'
       ? { fingerprint: value.fingerprint, startedAt: value.startedAt }
       : undefined;
+  }
+
+  /** The players Intermission has seen play, and new IDs it follows; see PlayerBook. */
+  readPlayers(): Promise<Record<string, unknown> | undefined> {
+    return this.readJson(FILES.players);
+  }
+
+  writePlayers(value: unknown): Promise<void> {
+    return this.writeJson(FILES.players, value);
   }
 
   /** Removes the sign-in and Plex Pass history. Keeps the client ID and webhook key. */

@@ -50,17 +50,17 @@ const SENSORS = [
   { id: 'credits-state', name: 'In Credits', type: 'occupancy', state: 'credits' },
 ];
 
-function setup({ playing = [], markers = [{ type: 'credits', startMs: 100_000, endMs: 120_000, final: true }], raw = {}, sensors: list = SENSORS, getFacts } = {}) {
+function setup({ playing = [], markers = [{ type: 'credits', startMs: 100_000, endMs: 120_000, final: true }], raw = {}, sensors: list = SENSORS, getFacts, players, sessionFor, log: logOverride } = {}) {
   const clock = new FakeClock();
   const stream = new FakeStream();
   const webhooks = new FakeWebhooks();
   const errors = [];
-  const log = { ...silentLog, error: (...args) => errors.push(args) };
+  const log = { ...silentLog, ...logOverride, error: (...args) => errors.push(args) };
   const config = parseConfig({ servers: [{ id: 'server-1', name: 'Plex', url: 'http://plex' }], sensors: list, ...raw }, silentLog);
   const sensors = config.sensors.map((sensor) => new FakeSensor(sensor));
   const server = {
     playing: async () => (typeof playing === 'function' ? playing() : playing),
-    session: async () => session(),
+    session: async (playerId) => (sessionFor ? sessionFor(playerId) : session()),
   };
   let unauthorized = 0;
   const controller = new Controller({
@@ -75,6 +75,7 @@ function setup({ playing = [], markers = [{ type: 'credits', startMs: 100_000, e
     getFacts,
     sensors,
     onUnauthorized: () => unauthorized++,
+    players,
   });
   const byId = Object.fromEntries(sensors.map((sensor) => [sensor.config.id, sensor]));
   return { clock, stream, webhooks, controller, sensors: byId, errors, unauthorized: () => unauthorized };
@@ -280,4 +281,157 @@ test('media conditions: a sensor turns on once the item\'s details are read, and
   await settle();
   assert.equal(reads, 1, 'details are read once per item');
   await controller.stop();
+});
+
+test('a chosen player that Plex gives a new ID is followed when its name, app and address match', async () => {
+  const { PlayerBook } = await import('../dist/players.js');
+  let saved;
+  const storage = { readPlayers: async () => saved, writePlayers: async (value) => { saved = value; } };
+  const book = new PlayerBook(storage);
+  await book.load();
+  const info = [];
+  const warnings = [];
+  const details = {
+    OLD: { playerTitle: 'Apple TV', product: 'Plex for Apple TV', address: '10.0.0.20' },
+    NEW: { playerTitle: 'Apple TV', product: 'Plex for Apple TV', address: '10.0.0.20' },
+    INFUSE: { playerTitle: 'Apple TV', product: 'Infuse', address: '10.0.0.20' },
+    BEDROOM: { playerTitle: 'Apple TV', product: 'Plex for Apple TV', address: '10.0.0.31' },
+  };
+  const { clock, stream, controller, sensors } = setup({
+    sensors: [{ id: 'playing', name: 'Movie Playing', type: 'occupancy', state: 'playing', filters: { players: ['OLD'] } }],
+    raw: { selection: { players: [{ id: 'OLD', name: 'Apple TV', product: 'Plex for Apple TV' }], dismissedPlayers: [] } },
+    players: book,
+    sessionFor: (playerId) => session({ playerId, ...details[playerId] }),
+    log: { info: (...a) => info.push(a.join(' ')), warn: (...a) => warn(a) },
+  });
+  function warn(a) { warnings.push(a.join(' ')); }
+  await controller.start();
+  stream.connect();
+  await settle();
+  const play = async (id, key) => {
+    stream.emit('playing', { clientIdentifier: id, sessionKey: key, ratingKey: '1', state: 'playing', viewOffset: 1_000 });
+    for (let i = 0; i < 5; i++) await settle();
+  };
+  const stop = async (id, key) => {
+    stream.emit('playing', { clientIdentifier: id, sessionKey: key, ratingKey: '1', state: 'stopped', viewOffset: 1_000 });
+    await clock.advance(30_000);
+  };
+
+  await play('OLD', '1');
+  assert.equal(sensors.playing.active, true);
+  assert.equal(book.get('OLD').address, '10.0.0.20', 'the chosen player is learned as it plays');
+  await stop('OLD', '1');
+
+  await play('INFUSE', '2');
+  assert.equal(sensors.playing.active, false, 'another app on the same Apple TV is not followed');
+  assert.equal(warnings.length, 0, 'a different app is not pointed out');
+  await stop('INFUSE', '2');
+
+  await play('BEDROOM', '3');
+  assert.equal(sensors.playing.active, false, 'the same app on another address is not followed');
+  assert.match(warnings[0], /no sensor watches it/);
+  await stop('BEDROOM', '3');
+
+  await play('NEW', '4');
+  assert.equal(sensors.playing.active, true, 'the reinstalled app is followed');
+  assert.ok(info.some((line) => /has a new Plex ID/.test(line)));
+  assert.deepEqual(saved.followed, { NEW: ['OLD'] }, 'kept across restarts');
+  await book.flush();
+});
+
+test('player records survive bad files and forget players unseen for 90 days', async () => {
+  const { PlayerBook, parseRecords } = await import('../dist/players.js');
+  const empty = { seen: {}, followed: {}, sightings: {}, sharedNames: {} };
+  assert.deepEqual(parseRecords('junk'), empty);
+  assert.deepEqual(parseRecords({ seen: { A: { name: 1 } }, followed: { B: 'x' } }), empty);
+  const old = { seen: { A: { lastPlayedAt: '2026-01-01T00:00:00Z' }, B: { lastPlayedAt: '2026-11-01T00:00:00Z' } }, followed: { A: ['X'] } };
+  const book = new PlayerBook({ readPlayers: async () => old, writePlayers: async () => {} });
+  await book.load(new Date('2026-11-06T00:00:00Z'));
+  assert.equal(book.get('A'), undefined);
+  assert.deepEqual(book.followedAs('A'), []);
+  assert.ok(book.get('B'));
+});
+
+test('a device follows every app reporting its name at home, except apps left out', async () => {
+  const details = {
+    PLEX: { playerTitle: 'Apple TV', product: 'Plex for Apple TV', platform: 'tvOS', address: '10.0.0.20', local: true },
+    INFUSE: { playerTitle: 'Apple TV', product: 'Infuse', platform: 'tvOS', address: '10.0.0.20', local: true },
+    KIDS: { playerTitle: 'Apple TV', product: 'Kids App', platform: 'tvOS', address: '10.0.0.20', local: true },
+    BRIDGED: { playerTitle: 'Apple TV', product: 'Plex for Apple TV', platform: 'tvOS', address: '192.168.1.40', local: false },
+    AWAY: { playerTitle: 'Apple TV', product: 'Plex for Apple TV', platform: 'tvOS', address: '73.14.2.9', local: false },
+    PHONE: { playerTitle: 'iPhone', product: 'Plex for iOS', platform: 'iOS', address: '10.0.0.30', local: true },
+  };
+  const { clock, stream, controller, sensors } = setup({
+    sensors: [{ id: 'playing', name: 'Movie Playing', type: 'occupancy', state: 'playing', filters: { devices: ['d-1'], exceptPlayers: ['KIDS'] } }],
+    raw: { devices: [{ id: 'd-1', name: 'Living Room', match: 'apple tv' }] },
+    sessionFor: (playerId) => session({ playerId, ...details[playerId] }),
+  });
+  await controller.start();
+  stream.connect();
+  await settle();
+  const check = async (id, want, why) => {
+    stream.emit('playing', { clientIdentifier: id, sessionKey: id, ratingKey: '1', state: 'playing', viewOffset: 1_000 });
+    for (let i = 0; i < 5; i++) await settle();
+    assert.equal(sensors.playing.active, want, `${id}: ${why}`);
+    stream.emit('playing', { clientIdentifier: id, sessionKey: id, ratingKey: '1', state: 'stopped', viewOffset: 1_000 });
+    await clock.advance(30_000);
+  };
+  await check('PLEX', true, 'the Plex app on the device');
+  await check('INFUSE', true, 'another app on the device, never chosen by ID');
+  await check('KIDS', false, 'an app left out');
+  await check('BRIDGED', true, 'a private address counts as home even when Plex says remote');
+  await check('AWAY', false, 'a same-named device outside the home');
+  await check('PHONE', false, 'another device');
+});
+
+test('a device narrowed to its apps takes a new app at the same address; a name seen at two addresses in turn is shared', async () => {
+  const { PlayerBook } = await import('../dist/players.js');
+  let saved;
+  const book = new PlayerBook({ readPlayers: async () => saved, writePlayers: async (value) => { saved = value; } });
+  await book.load();
+  const warnings = [];
+  const at = (address) => ({ playerTitle: 'Apple TV', platform: 'tvOS', address, local: true });
+  const details = {
+    PLEX: { ...at('10.0.0.20'), product: 'Plex for Apple TV' },
+    VIDHUB: { ...at('10.0.0.20'), product: 'VidHub' },
+    BEDROOM: { ...at('10.0.0.31'), product: 'Plex for Apple TV' },
+    PLEX2: { ...at('10.0.0.20'), product: 'Plex for Apple TV' },
+  };
+  const { clock, stream, controller, sensors } = setup({
+    sensors: [{ id: 'playing', name: 'Movie Playing', type: 'occupancy', state: 'playing', filters: { devices: ['d-1'] } }],
+    raw: { devices: [{ id: 'd-1', name: 'Living Room', match: 'Apple TV', apps: ['PLEX'] }] },
+    players: book,
+    sessionFor: (playerId) => session({ playerId, ...details[playerId] }),
+    log: { warn: (...a) => warnings.push(a.join(' ')) },
+  });
+  await controller.start();
+  stream.connect();
+  await settle();
+  const play = async (id, want, why) => {
+    stream.emit('playing', { clientIdentifier: id, sessionKey: id, ratingKey: '1', state: 'playing', viewOffset: 1_000 });
+    for (let i = 0; i < 6; i++) await settle();
+    assert.equal(sensors.playing.active, want, `${id}: ${why}`);
+    stream.emit('playing', { clientIdentifier: id, sessionKey: id, ratingKey: '1', state: 'stopped', viewOffset: 1_000 });
+    await clock.advance(30_000);
+  };
+  await play('PLEX', true, 'a pinned app');
+  await play('VIDHUB', true, 'a new app at the pinned app\'s address joins the device');
+  await play('BEDROOM', false, 'the other Apple TV');
+  assert.equal(book.isShared('Apple TV'), false, 'one move could be an address change');
+  await play('PLEX2', true, 'a reinstalled app back at the first address');
+  assert.equal(book.isShared('apple tv'), true, 'back at the first address: two devices');
+  assert.deepEqual(book.followedAs('VIDHUB'), ['PLEX']);
+});
+
+test('addresses shared by players on different platforms are not trusted', async () => {
+  const { PlayerBook } = await import('../dist/players.js');
+  const book = new PlayerBook({ readPlayers: async () => undefined, writePlayers: async () => {} });
+  await book.load();
+  const media = session().media;
+  book.record({ playerId: 'TV', playerTitle: 'Apple TV', platform: 'tvOS', address: '172.17.0.1', media }, new Set());
+  assert.equal(book.trusted('172.17.0.1'), true);
+  book.record({ playerId: 'PHONE', playerTitle: 'iPhone', platform: 'iOS', address: '172.17.0.1', media }, new Set());
+  assert.equal(book.trusted('172.17.0.1'), false);
+  const { followed } = book.record({ playerId: 'TV2', playerTitle: 'Apple TV', platform: 'tvOS', product: 'X', address: '172.17.0.1', media }, new Set(['TV']), { pinned: new Set(['TV']) });
+  assert.deepEqual(followed, [], 'nothing is followed by an untrusted address');
 });

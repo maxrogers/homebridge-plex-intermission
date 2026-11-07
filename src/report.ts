@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
 
 import { commandLine, person, player, readDiagnostics, redact, scrubSecrets, tailDiagnostics } from './diagnostics.js';
+import { isPrivateAddress } from './sensors/rules.js';
+import type { SeenPlayer } from './players.js';
 import { hidePublicAddresses, maskAddress } from './network.js';
 import type { PortState, ReportInput, SetupService } from './setup-service.js';
 import { webhookOptionsFrom } from './setup-service.js';
@@ -108,6 +110,15 @@ export async function diagnosticsReport(service: SetupService, input: ReportInpu
     const tell = [found?.product, id.slice(0, 8)].filter(Boolean).join(', ');
     return found?.name ? `${player(found.name)} (${tell})` : id;
   };
+  const devices = new Map((Array.isArray(config.devices) ? config.devices as { id: string; name?: string; match?: string; apps?: string[] }[] : []).map((d) => [d.id, d]));
+  const describeDevice = (id: string) => {
+    const device = devices.get(id);
+    if (!device) {
+      return `${id} (no longer defined, matches nothing)`;
+    }
+    const apps = device.apps?.length ? `, only ${device.apps.map((a) => a.slice(0, 8)).join(', ')}` : '';
+    return `${player(device.name ?? device.match)} (device, any app named ${player(device.match)} at home${apps})`;
+  };
   const libraryNames = new Map((selection.libraries ?? []).map((l) => [l.key, l.title ?? l.key]));
   const commands = new Map(((config.commands as { list?: { id: string; name?: string; command?: string }[] } | undefined)?.list ?? []).map((c) => [c.id, c]));
   const list = (values: unknown, name: (v: string) => string, all: string) => {
@@ -131,7 +142,12 @@ export async function diagnosticsReport(service: SetupService, input: ReportInpu
     lines.push(sensor.type === 'button'
       ? `  pressed on: ${list(sensor.events, (e) => e, 'nothing')}`
       : `  on while: ${String(sensor.state)}${Array.isArray(sensor.except) && sensor.except.length ? `, except ${sensor.except.join(' and ')}` : ''}`);
-    lines.push(`  players: ${list(f.players, describePlayer, 'all')}`);
+    const chosen = [...(Array.isArray(f.devices) ? f.devices.map((d) => describeDevice(String(d))) : []),
+      ...(Array.isArray(f.players) ? f.players.map((p) => describePlayer(String(p))) : [])];
+    lines.push(`  players: ${chosen.length ? chosen.join(', ') : 'all'}`);
+    if (Array.isArray(f.exceptPlayers) && f.exceptPlayers.length) {
+      lines.push(`  except apps: ${f.exceptPlayers.map((p) => describePlayer(String(p))).join(', ')}`);
+    }
     lines.push(`  people: ${list(f.users, (u) => person(u), 'all')}`);
     lines.push(`  libraries: ${list(f.libraries, (k) => libraryNames.get(k) ?? k, 'all')}`);
     if (sensor.media && Object.keys(sensor.media).length) {
@@ -146,6 +162,19 @@ export async function diagnosticsReport(service: SetupService, input: ReportInpu
     for (const command of commands.values()) {
       lines.push(`${command.name ?? '?'}: ${commandLine(command.command ?? '')}`);
     }
+  }
+  const { seen, followed, sharedNames } = await service.players();
+  const seenIds = Object.keys(seen).sort((a, b) => Date.parse(seen[b]!.lastPlayedAt) - Date.parse(seen[a]!.lastPlayedAt));
+  if (seenIds.length > 0) {
+    lines.push('', `== Players seen playing (${seenIds.length}) ==`);
+    for (const id of seenIds) {
+      const p = seen[id]!;
+      const followsAs = followed[id]?.length ? `, followed as ${followed[id]!.map((t) => t.slice(0, 8)).join(', ')}` : '';
+      const where = [p.address ? (isPrivateAddress(p.address) ? 'private address' : 'public address') : '', p.local === undefined ? '' : `Plex says ${p.local ? 'local' : 'remote'}`];
+      lines.push(`${p.name ? player(p.name) : '?'} (${[p.product, p.platform, id.slice(0, 8)].filter(Boolean).join(', ')}): last played ${p.lastPlayedAt}`
+        + `${where.filter(Boolean).map((w) => `, ${w}`).join('')}${players.has(id) ? ', chosen' : ''}${followsAs}`);
+    }
+    lines.push(...networkCheck(Object.values(seen), Object.keys(sharedNames)));
   }
   const log = (await readDiagnostics(service.storage.directory)).reverse();
   lines.push('', `== Recent log (${log.length} lines, newest first, detailed) ==`, ...(log.length ? log : [NOTHING_LOGGED]));
@@ -170,4 +199,28 @@ async function secretsOf(service: SetupService): Promise<string[]> {
   const credentials = await service.storage.readCredentials();
   const { webhookSecret } = await service.storage.state();
   return [webhookSecret, credentials?.accountToken, ...Object.values(credentials?.serverTokens ?? {})].filter((s): s is string => Boolean(s));
+}
+
+/** What the players' addresses say about the network, for "my Apple TV is ignored" reports. */
+function networkCheck(seen: readonly SeenPlayer[], sharedNames: readonly string[]): string[] {
+  const lines = ['', '== Network check =='];
+  const byAddress = new Map<string, SeenPlayer[]>();
+  for (const p of seen) {
+    if (p.address) {
+      byAddress.set(p.address, [...(byAddress.get(p.address) ?? []), p]);
+    }
+  }
+  const crowded = [...byAddress.values()].filter((group) => new Set(group.flatMap((p) => (p.platform ? [p.platform.toLowerCase()] : []))).size > 1);
+  lines.push(crowded.length
+    ? 'Players on different platforms share an address, so Plex does not see their real addresses (Docker Desktop, rootless Docker or a proxy?). Addresses are not used to tell devices apart.'
+    : `Players' addresses look real (${byAddress.size} distinct).`);
+  const privateButRemote = seen.filter((p) => isPrivateAddress(p.address) && p.local === false).length;
+  if (privateButRemote > 0) {
+    lines.push(`${privateButRemote} player(s) with a private address are marked remote by Plex. Intermission still counts them as at home; `
+      + 'adding your home network under LAN Networks in Plex\'s Network settings fixes it in Plex too.');
+  }
+  if (sharedNames.length) {
+    lines.push(`Names reported by two devices: ${sharedNames.map((n) => player(n)).join(', ')}.`);
+  }
+  return lines;
 }

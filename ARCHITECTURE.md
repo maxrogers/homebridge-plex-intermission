@@ -63,6 +63,7 @@ Plex (Plex Pass) ──webhooks──▶ WebhookServer ──────┼─�
 | `src/engine/` | Per-player state machine; credits, intro, pause and stop timing |
 | `src/plex/` | Server and plex.tv clients, notification websocket, webhook receiver, payload parsing, marker cache |
 | `src/controller.ts` | One per server: feeds the engine, re-evaluates state sensors on every event, presses buttons |
+| `src/players.ts` | Players seen playing, and following a chosen player that Plex gives a new ID |
 | `src/sensors/` | Filters and conditions (`rules.ts`), HomeKit services (`sensor-accessory.ts`), combining servers (`sensor-hub.ts`) |
 | `src/platform.ts` | Homebridge platform: accessories, start-up, daily Plex Pass check, shutdown |
 | `src/setup-service.ts`, `src/report.ts` | What the settings page asks of Plex; the diagnostics file |
@@ -136,12 +137,38 @@ stateless programmable switches.
 | In the intro | | |
 | Nothing playing | | Every State |
 
-Filters (players, people, libraries; libraries as `serverId/sectionId`, including Live TV) are OR within a filter and
-AND across them; an empty filter allows everything. State sensors can also have **media conditions** on the library
+Filters (devices or apps, people, libraries; libraries as `serverId/sectionId`, including Live TV) are OR within a
+filter and AND across them; an empty filter allows everything.
+
+**Devices.** Every app on a device reports the device's name as its player title, and since iOS 16 (apparently tvOS too) most apps get
+the model name ("Apple TV", "iPhone") rather than the name the user gave it. A device (`config.devices`) is that
+reported name: playback counts when the player reports it (case-insensitive) and is at home, meaning Plex marks it
+local or its address is private. A remote player always reaches the server from a public address, so a same-named
+device in someone else's house never matches; a private address marked remote happens when Plex runs in a Docker
+bridge network without LAN Networks set. Sensors list device IDs (`filters.devices`) and apps left out
+(`filters.exceptPlayers`); app IDs chosen one by one (`filters.players`) still work and are moved to devices by the
+settings page. When two devices report one name, the player book notices (below) and setup offers **This one**, which
+narrows the device to the apps last seen at the playing app's address (`apps`); new apps at that address join it.
+Addresses are evidence, never labels or filters, so an address change breaks nothing: filters hold names and app IDs,
+and the address is re-learned as soon as a known app plays. State sensors can also have **media conditions** on the library
 item: picture shape (wide is 2.2:1 or wider), resolution, HDR (HDR includes Dolby Vision), content rating and Plex
 labels (an episode also uses its show's). They are read from `/library/metadata`, not the session, so transcoding
 can't change them, and unknown values fail. A letterboxed 2.39:1 film encoded as 16:9 reports 1.78; a Plex label is
 the reliable choice for those.
+
+**Player book.** Two-device detection: a name seen at one address, then another, then the first again belongs to two
+devices; an address change moves a device once and never back. An address shared by players on different platforms
+(Docker Desktop, rootless Docker) is not trusted, so nothing is followed or detected through it.
+
+**New player IDs.** Filters hold Plex client IDs, and Plex gives an app a new one when it is reinstalled or signed in
+again (newer Plex apps appear to use 24-character lowercase IDs; older builds and most other apps use UUIDs). On each play
+the controller records the player's name, app and LAN address (from `/status/sessions`; webhooks carry no LAN
+address) in `players.json`. A player on no sensor whose name, app and address all match a chosen player is followed as
+that player: filters treat it as the chosen ID, and the log says so once. Requiring the address keeps two Apple TVs
+with the same name and app in different rooms apart, and requiring the app keeps Infuse and Plex on one Apple TV apart.
+A player that only shares a chosen player's name (and app, when both are known) is pointed out once per run with a
+warning. The Sensors tab offers to add either to the sensors that watch the chosen player, or to leave it off
+(`selection.dismissedPlayers`, which also stops following).
 
 Buttons press on engine events or webhook-only events (`media.scrobble`, `media.rate`, `library.new`,
 `library.on.deck`, `playback.started`, `device.new`, `admin.database.backup`, `admin.database.corrupted`). Without
@@ -262,6 +289,7 @@ In `<Homebridge storage>/intermission/`, folder 0700 and files 0600, written ato
 | `state.json` | This install's Plex client ID and webhook key |
 | `plex-pass.json` | Last Plex Pass status and whether its change was shown |
 | `running.json` | Fingerprint of the running config |
+| `players.json` | Players seen playing in the last 90 days (name, app, LAN address, last play) and new IDs followed |
 | `diagnostics.log`, `diagnostics.1.log` | The kept log, about 1 MB each |
 
 Tokens never appear in `config.json`, logs, diagnostics or the settings page; the page only learns "signed in as".

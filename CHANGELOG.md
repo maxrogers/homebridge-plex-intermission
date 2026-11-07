@@ -5,6 +5,41 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-06
+
+### Added
+
+- Players are chosen by device. Choosing the Apple TV includes every Plex app on it, including apps added or reinstalled
+  later, while it plays on your home network. *Choose apps* lists the apps seen on a device, to leave one out.
+- Two devices that report the same name (apps see "Apple TV" for every Apple TV) are noticed, with a log warning, and
+  setup offers *This one* to keep only the one in the room. You can name devices.
+- Diagnostics: a Network check saying whether Plex sees players' real addresses and marks them local, devices and apps
+  left out on each sensor, and each player's platform.
+
+### Changed
+
+- Choices made app by app move to devices when the settings page opens. Apps that weren't chosen are left out, so
+  nothing new changes the lights; press Save to keep it.
+- A player is at home when Plex marks it local or its address is private, so Plex in a Docker bridge network without
+  LAN Networks set still works.
+- Addresses shared by players on different platforms are never used to tell devices apart or follow new IDs.
+
+## [1.0.2] - 2026-11-06
+
+### Fixed
+
+- A player that Plex gives a new ID, after its app is reinstalled or signed in again, keeps changing the lights. When
+  its name, app and LAN address match a chosen player, the sensors follow it as that player and the log says so.
+- A player that only shares a chosen player's name gets a warning in the log instead of being silently ignored.
+
+### Changed
+
+- The Sensors tab offers to add a player with a new ID to the sensors that watch the player it replaces, or to leave it
+  off.
+- Setup: players that share a name show when each last played and the start of its ID, and apps Plex lists without a
+  name show the app Intermission saw them play as.
+- Diagnostics lists the players seen playing, with their app, last play and whether they are chosen or followed.
+
 ## [1.0.1] - 2026-10-23
 
 ### Fixed
@@ -72,6 +107,8 @@ First public release.
   Home app.
 - Lost connections to Plex are retried with their reasons logged, with a warning if Plex stays unreachable.
 
-[Unreleased]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.0.2...v1.1.0
+[1.0.2]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/maxrogers/homebridge-plex-intermission/releases/tag/v1.0.0

@@ -162,7 +162,111 @@ export function sensorId() {
   return `s-${[...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
 }
 
-const emptyFilters = () => ({ players: [], users: [], libraries: [] });
+const emptyFilters = () => ({ players: [], devices: [], exceptPlayers: [], users: [], libraries: [] });
+
+/* ---------- devices ---------- */
+
+export function deviceId() {
+  return `d-${sensorId().slice(2)}`;
+}
+
+const nameKey = (name) => (name ?? '').trim().toLowerCase();
+
+/**
+ * Players grouped into devices by the name their apps report, most used first. Every app on an
+ * Apple TV reports the Apple TV's name, so one group is one device (or several with one name).
+ */
+export function deviceGroups(players = []) {
+  const groups = new Map();
+  for (const player of players) {
+    const key = nameKey(player.name);
+    const group = groups.get(key) ?? { match: player.name, apps: [], plays: 0, playingNow: false, lastUsedAt: 0 };
+    group.apps.push(player);
+    group.plays += player.plays ?? 0;
+    group.playingNow ||= player.playingNow === true;
+    group.lastUsedAt = Math.max(group.lastUsedAt, player.lastUsedAt ?? 0);
+    groups.set(key, group);
+  }
+  return [...groups.values()].sort((a, b) => Number(b.playingNow) - Number(a.playingNow) || b.plays - a.plays || b.lastUsedAt - a.lastUsedAt);
+}
+
+/** The device that takes every app reporting `match`, or undefined. Devices narrowed to apps don't count. */
+export function deviceFor(devices = [], match) {
+  return devices.find((d) => !(d.apps?.length) && nameKey(d.match) === nameKey(match));
+}
+
+/** A new device taking every app that reports `match`. */
+export function newDevice(match) {
+  return { id: deviceId(), name: match, match };
+}
+
+/** Devices in `extra` that `devices` lacks (by ID), added. */
+export function mergeDevices(devices = [], extra = []) {
+  return [...devices.map((d) => extra.find((e) => e.id === d.id) ?? d), ...extra.filter((e) => !devices.some((d) => d.id === e.id))];
+}
+
+/** Devices any sensor or the setup choices use; the rest are dropped. */
+export function usedDevices(config) {
+  const used = new Set([...(config.selection?.devices ?? []).map((d) => d.id), ...(config.sensors ?? []).flatMap((s) => s.filters?.devices ?? [])]);
+  return (config.devices ?? []).filter((d) => used.has(d.id));
+}
+
+/** Whether a known app is on a device: one of its pinned apps, or any app reporting its name. */
+export function appOnDevice(device, player) {
+  return device.apps?.length ? device.apps.includes(player.id) : nameKey(device.match) === nameKey(player.name);
+}
+
+/**
+ * Moves player choices made one app at a time (before 1.1) to devices. Each chosen player's name
+ * becomes a device; known apps with that name that were not chosen are left out, so nothing that
+ * was ignored starts counting. Players whose name is unknown stay as they are.
+ * `known` lists every player the page knows (discovery and players seen). Returns undefined when
+ * there is nothing to move.
+ */
+export function migrateToDevices(config, known = []) {
+  const selection = config.selection ?? {};
+  const legacy = [...(selection.players ?? []).map((p) => p.id), ...(config.sensors ?? []).flatMap((s) => s.filters?.players ?? [])];
+  const nameOf = (id) => (selection.players ?? []).find((p) => p.id === id)?.name ?? known.find((p) => p.id === id)?.name;
+  if (!legacy.some(nameOf)) {
+    return undefined;
+  }
+  let devices = [...(config.devices ?? [])];
+  const deviceOf = (name) => {
+    let device = deviceFor(devices, name);
+    if (!device) {
+      device = newDevice(name);
+      devices = [...devices, device];
+    }
+    return device;
+  };
+  const sameName = (name) => [...new Map([...(selection.players ?? []), ...known].filter((p) => nameKey(p.name) === nameKey(name)).map((p) => [p.id, p])).keys()];
+  const convert = (ids, except = []) => {
+    const named = ids.filter((id) => nameOf(id));
+    const devicesUsed = [...new Map(named.map((id) => deviceOf(nameOf(id))).map((d) => [d.id, d])).values()];
+    const left = devicesUsed.flatMap((d) => sameName(d.match).filter((id) => !ids.includes(id)));
+    return { players: ids.filter((id) => !nameOf(id)), devices: devicesUsed.map((d) => d.id), exceptPlayers: [...new Set([...except, ...left])] };
+  };
+  const chosen = convert((selection.players ?? []).map((p) => p.id), selection.exceptPlayers ?? []);
+  const sensors = (config.sensors ?? []).map((s) => {
+    const players = s.filters?.players ?? [];
+    if (players.length === 0) {
+      return s;
+    }
+    const moved = convert(players, s.filters.exceptPlayers ?? []);
+    return { ...s, filters: { ...s.filters, players: moved.players, devices: [...new Set([...(s.filters.devices ?? []), ...moved.devices])], exceptPlayers: moved.exceptPlayers } };
+  });
+  return {
+    ...config,
+    devices,
+    selection: {
+      ...selection,
+      players: (selection.players ?? []).filter((p) => chosen.players.includes(p.id)),
+      devices: [...(selection.devices ?? []), ...chosen.devices.map((id) => devices.find((d) => d.id === id)).filter((d) => !(selection.devices ?? []).some((s) => s.id === d.id))],
+      exceptPlayers: chosen.exceptPlayers,
+    },
+    sensors,
+  };
+}
 
 /** A new sensor or button, starting from the setup's players, people and libraries when given. */
 export function newSensor(type = 'occupancy', selection) {
@@ -172,10 +276,12 @@ export function newSensor(type = 'occupancy', selection) {
     : { id: sensorId(), name: 'New button', type, events: ['play'], filters };
 }
 
-/** Filters for the choices made during setup: the chosen players, users and libraries. */
+/** Filters for the choices made during setup: the chosen devices and players, users and libraries. */
 export function filtersFrom(selection) {
   return {
     players: selection.allPlayers ? [] : (selection.players ?? []).map((p) => p.id),
+    devices: selection.allPlayers ? [] : (selection.devices ?? []).map((d) => d.id),
+    exceptPlayers: selection.allPlayers ? [] : [...(selection.exceptPlayers ?? [])],
     users: selection.allUsers === false ? [...(selection.users ?? [])] : [],
     libraries: selection.allLibraries ? [] : (selection.libraries ?? []).map((l) => l.key),
   };
@@ -300,7 +406,7 @@ export function groupIntact(members) {
   const want = preset.sensors.map((s) => `${s.state}:${[...(s.except ?? [])].sort().join('+')}`).sort();
   const have = members.map((s) => (SENSOR_TYPES[s.type]?.state ? key(s) : 'button')).sort();
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  const scope = (s) => [s.filters?.players ?? [], s.filters?.users ?? [], s.filters?.libraries ?? [], s.media ?? {}]
+  const scope = (s) => [s.filters?.players ?? [], s.filters?.devices ?? [], s.filters?.exceptPlayers ?? [], s.filters?.users ?? [], s.filters?.libraries ?? [], s.media ?? {}]
     .map((v) => (Array.isArray(v) ? [...v].sort() : v));
   return same(want, have) && members.every((m) => same(scope(m), scope(members[0])));
 }
@@ -309,13 +415,14 @@ export function libraryRef(server, library) {
   return { key: library.key, title: library.title, kind: library.kind, serverId: server.id, serverName: server.name };
 }
 
-/** Initial choices: the most used player, all Plex Home users, and every Movies and TV library. */
+/** Initial choices: the device playing now or the most used one, all Plex Home users, and every Movies and TV library. */
 export function defaultSelection(discovery) {
-  const players = discovery.players ?? [];
-  const live = players.filter((p) => p.playingNow);
+  const groups = deviceGroups(discovery.players ?? []);
   return {
-    allPlayers: players.length === 0,
-    players: (live.length > 0 ? live : players.slice(0, 1)).map(playerRef),
+    allPlayers: groups.length === 0,
+    players: [],
+    devices: groups.slice(0, 1).map((g) => newDevice(g.match)),
+    exceptPlayers: [],
     allUsers: true,
     allLibraries: false,
     users: [],
@@ -374,7 +481,7 @@ export function followSelection(sensors, before, after) {
   const result = sensors.map((sensor) => {
     const filters = { ...sensor.filters };
     let touched = false;
-    for (const key of ['players', 'users', 'libraries']) {
+    for (const key of ['players', 'devices', 'exceptPlayers', 'users', 'libraries']) {
       if (same(filters[key], was[key]) && !same(was[key], now[key])) {
         filters[key] = [...now[key]];
         touched = true;
@@ -394,8 +501,17 @@ export function followSelection(sensors, before, after) {
  * setup players (so they look like they were meant to follow setup). Players in `dismissedPlayers` are
  * left out. Returns the players and sensor IDs.
  */
-export function missingSetupPlayers(sensors, selection) {
+export function missingSetupPlayers(sensors, selection, known = []) {
   const dismissed = selection?.dismissedPlayers ?? [];
+  // Devices: apps a sensor leaves out though setup includes them, on sensors with the setup's devices.
+  const setupDevices = (selection?.devices ?? []).map((d) => d.id).sort().join();
+  const setupExcept = selection?.exceptPlayers ?? [];
+  const deviceSensors = setupDevices ? sensors.filter((s) => [...(s.filters?.devices ?? [])].sort().join() === setupDevices) : [];
+  const leftOut = deviceSensors.filter((s) => (s.filters.exceptPlayers ?? []).some((id) => !setupExcept.includes(id) && !dismissed.includes(id)));
+  if (leftOut.length > 0) {
+    const ids = [...new Set(leftOut.flatMap((s) => s.filters.exceptPlayers.filter((id) => !setupExcept.includes(id) && !dismissed.includes(id))))];
+    return { players: ids.map((id) => known.find((p) => p.id === id) ?? { id, name: id }), sensorIds: leftOut.map((s) => s.id), leftOut: true };
+  }
   const all = selection?.allPlayers ? [] : (selection?.players ?? []);
   const ids = all.map((p) => p.id);
   const chosen = all.filter((p) => !dismissed.includes(p.id));
@@ -405,6 +521,64 @@ export function missingSetupPlayers(sensors, selection) {
   });
   const missing = chosen.filter((p) => affected.some((s) => !s.filters.players.includes(p.id)));
   return { players: missing, sensorIds: affected.map((s) => s.id) };
+}
+
+const sameText = (a, b) => typeof a === 'string' && typeof b === 'string' && a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/** Players Intermission saw play in the last 30 days that may be a chosen player with a new Plex ID. */
+const RECENT_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Players that played recently, are on no sensor, and are either followed as a chosen player (same
+ * name, app and address) or share a chosen player's name (and app, when both are known). Each comes
+ * with the chosen players it stands for. `records` is players.json as the settings server returns it.
+ */
+export function newPlayerIds(records, selection, sensors, { now = Date.now(), devices = [] } = {}) {
+  const used = new Set(sensors.flatMap((s) => s.filters?.devices ?? []));
+  const pinned = new Set(devices.filter((d) => used.has(d.id)).flatMap((d) => d.apps ?? []));
+  const chosen = new Set([...sensors.flatMap((s) => s.filters?.players ?? []), ...pinned]);
+  if (chosen.size === 0 || !records) {
+    return [];
+  }
+  const dismissed = selection?.dismissedPlayers ?? [];
+  // A pinned app is known at least by its device's name.
+  const deviceName = (id) => devices.find((d) => (d.apps ?? []).includes(id))?.match;
+  const known = (id) => ({ name: deviceName(id), ...(selection?.players ?? []).find((p) => p.id === id), ...records.seen?.[id] });
+  return Object.entries(records.seen ?? {})
+    .filter(([id, seen]) => !chosen.has(id) && !dismissed.includes(id) && now - Date.parse(seen.lastPlayedAt) < RECENT_MS)
+    .map(([id, seen]) => {
+      const followed = (records.followed?.[id] ?? []).filter((target) => chosen.has(target));
+      const targets = followed.length > 0 ? followed : [...chosen].filter((target) => {
+        const other = known(target);
+        return sameText(other.name, seen.name) && (pinned.has(target) || !other.product || !seen.product || sameText(other.product, seen.product));
+      });
+      return { id, name: seen.name ?? id, product: seen.product, lastPlayedAt: seen.lastPlayedAt, followed: followed.length > 0, targets };
+    })
+    .filter((player) => player.targets.length > 0)
+    .sort((a, b) => Date.parse(b.lastPlayedAt) - Date.parse(a.lastPlayedAt));
+}
+
+/**
+ * Adds a new player ID where the players it stands for (`targets`) are: to devices narrowed to those
+ * apps, and to sensors and setup choices that list them one by one.
+ */
+export function addPlayerId(config, player) {
+  const ref = { id: player.id, name: player.name, ...(player.product ? { product: player.product } : {}) };
+  const selection = config.selection ?? { players: [], allUsers: true, users: [], libraries: [] };
+  const grow = (d) => ((d.apps ?? []).some((id) => player.targets.includes(id)) && !d.apps.includes(player.id) ? { ...d, apps: [...d.apps, player.id] } : d);
+  const listed = (selection.players ?? []).some((p) => player.targets.includes(p.id));
+  return {
+    ...config,
+    devices: (config.devices ?? []).map(grow),
+    selection: {
+      ...selection,
+      devices: (selection.devices ?? []).map(grow),
+      players: listed ? [...(selection.players ?? []).filter((p) => p.id !== player.id), ref] : (selection.players ?? []),
+    },
+    sensors: config.sensors.map((s) => ((s.filters?.players ?? []).some((id) => player.targets.includes(id)) && !s.filters.players.includes(player.id)
+      ? { ...s, filters: { ...s.filters, players: [...s.filters.players, player.id] } }
+      : s)),
+  };
 }
 
 /** One plain-language line describing what a sensor does. */
@@ -418,8 +592,21 @@ export function summarize(sensor, selection = {}) {
   const when = SENSOR_TYPES[sensor.type]?.state
     ? `On while ${({ idle: 'nothing is playing', active: 'playing or paused', credits: 'in the credits', intro: 'in the intro' })[sensor.state] ?? (CONDITIONS[sensor.state] ?? CONDITIONS.playing).toLowerCase()}${except.length ? `, except during ${except.map((e) => EXCEPTIONS[e]?.label ?? e).join(' and ')}` : ''}`
     : `Pressed when ${list((sensor.events ?? []).map((e) => EVENTS[e]?.phrase ?? e), 'nothing (choose an event)')}`;
-  const f = sensor.filters ?? emptyFilters();
-  const where = list(f.players.map(player), 'any player');
+  const f = { ...emptyFilters(), ...sensor.filters };
+  const known = [...(selection.players ?? []), ...(selection.known ?? [])];
+  const appName = (id) => {
+    const found = known.find((p) => p.id === id);
+    return found ? (shortProduct(found.product) && shortProduct(found.product) !== found.name ? shortProduct(found.product) : `app ${id.slice(0, 8)}`) : `app ${id.slice(0, 8)}`;
+  };
+  const device = (id) => {
+    const found = (selection.devices ?? []).find((d) => d.id === id);
+    if (!found) {
+      return 'a removed device';
+    }
+    const left = f.exceptPlayers.filter((pid) => known.some((p) => p.id === pid && appOnDevice(found, p)));
+    return `${found.name}${left.length ? ` (not ${left.map(appName).join(' or ')})` : ''}`;
+  };
+  const where = list([...f.devices.map(device), ...f.players.map(player)], 'any player');
   const what = list(f.libraries.map((key) => name(selection.libraries, key, 'title', 'key')), 'anything');
   const who = list(f.users, 'anyone');
   const media = SENSOR_TYPES[sensor.type]?.state ? mediaPhrases(sensor.media) : [];

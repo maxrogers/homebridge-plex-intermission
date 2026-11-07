@@ -33,9 +33,30 @@ const CAN_EXCEPT: readonly StateCondition[] = ['playing', 'paused', 'active'];
 export const SENSOR_TYPES = ['occupancy', 'motion', 'contact', 'button'] as const;
 export type SensorType = (typeof SENSOR_TYPES)[number];
 
-/** Empty lists allow everything. Libraries are `serverId/sectionId` keys. */
+/**
+ * A device, such as an Apple TV, chosen as a whole: every app on it that plays on the home network.
+ * Apps report the device's name, so a device matches players by `match`, the reported name. When two
+ * devices report the same name, a device is narrowed to the apps seen on it (`apps`).
+ */
+export interface DeviceConfig {
+  id: string;
+  /** Shown in the settings page and logs. */
+  name: string;
+  /** The player name its apps report. Missing for a device that is no longer defined, which matches nothing. */
+  match?: string;
+  /** When set, only these apps (and new IDs followed as them) count. */
+  apps: string[];
+}
+
+/**
+ * Empty lists allow everything. A playback passes the player filter when its app is in `players` or
+ * it plays on one of `devices`, and it is not in `exceptPlayers`. Libraries are `serverId/sectionId` keys.
+ */
 export interface SensorFilters {
   players: string[];
+  devices?: DeviceConfig[];
+  /** Apps on a chosen device that are left out. */
+  exceptPlayers?: string[];
   users: string[];
   libraries: string[];
 }
@@ -95,6 +116,11 @@ export interface IntermissionConfig {
   detailedLogging: boolean;
   /** Named commands; empty when the feature is off. */
   commands: NamedCommand[];
+  /** Players chosen in setup, by ID, for recognising one that Plex gives a new ID. */
+  chosenPlayers: Record<string, { name?: string; product?: string }>;
+  devices: DeviceConfig[];
+  /** Player IDs the user chose to leave off the sensors, so they are not pointed out again. */
+  ignoredPlayers: string[];
 }
 
 export const DEFAULT_WEBHOOK_PORT = 32550;
@@ -161,11 +187,13 @@ export function parseConfig(raw: unknown, log: Logger): IntermissionConfig {
   const safetyResyncMs = timing.safetyResync === 0 ? 0 : minutes(timing, 'safetyResync', 5 * 60_000, 1, 30);
 
   const port = webhook.port;
+  const devices = parseDevices(config.devices);
   return {
     name: asString(config.name) ?? 'Intermission',
     setupId: asString(config.setupId),
     servers: parseServers(config.servers),
-    sensors: parseSensors(config.sensors, log),
+    devices,
+    sensors: parseSensors(config.sensors, log, devices),
     webhook: {
       enabled: webhook.enabled !== false,
       port: typeof port === 'number' && Number.isInteger(port) && port > 0 && port < 65536 ? port : DEFAULT_WEBHOOK_PORT,
@@ -175,7 +203,21 @@ export function parseConfig(raw: unknown, log: Logger): IntermissionConfig {
     safetyResyncMs,
     detailedLogging: config.detailedLogging === true,
     commands: parseCommands(config.commands),
+    ...parseSelection(config.selection),
   };
+}
+
+function parseSelection(value: unknown): Pick<IntermissionConfig, 'chosenPlayers' | 'ignoredPlayers'> {
+  const selection = asRecord(value);
+  const chosenPlayers: IntermissionConfig['chosenPlayers'] = {};
+  for (const entry of Array.isArray(selection.players) ? selection.players : []) {
+    const player = asRecord(entry);
+    const id = asString(player.id);
+    if (id) {
+      chosenPlayers[id] = { name: asString(player.name), product: asString(player.product) };
+    }
+  }
+  return { chosenPlayers, ignoredPlayers: asStrings(selection.dismissedPlayers) };
 }
 
 function parseCommands(value: unknown): NamedCommand[] {
@@ -233,7 +275,21 @@ export function hasMediaConditions(conditions: MediaConditions): boolean {
   return Object.keys(conditions).length > 0;
 }
 
-function parseSensors(value: unknown, log: Logger): SensorConfig[] {
+function parseDevices(value: unknown): DeviceConfig[] {
+  const seen = new Set<string>();
+  return (Array.isArray(value) ? value : []).flatMap((entry) => {
+    const device = asRecord(entry);
+    const id = asString(device.id);
+    const match = asString(device.match);
+    if (!id || !match || seen.has(id)) {
+      return [];
+    }
+    seen.add(id);
+    return [{ id, name: asString(device.name) ?? match, match, apps: asStrings(device.apps) }];
+  });
+}
+
+function parseSensors(value: unknown, log: Logger, devices: readonly DeviceConfig[] = []): SensorConfig[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -264,6 +320,9 @@ function parseSensors(value: unknown, log: Logger): SensorConfig[] {
       },
       filters: {
         players: asStrings(filters.players),
+        // An unknown device stays, matching nothing, so the filter never widens to every player.
+        devices: asStrings(filters.devices).map((deviceId) => devices.find((d) => d.id === deviceId) ?? { id: deviceId, name: deviceId, apps: [] }),
+        exceptPlayers: asStrings(filters.exceptPlayers),
         users: asStrings(filters.users),
         libraries: asStrings(filters.libraries),
       },

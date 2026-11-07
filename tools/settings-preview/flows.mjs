@@ -51,12 +51,15 @@ async function setField(page, selector, value) {
   await page.waitForTimeout(200);
 }
 
-const existing = (serverIds, libraries) => JSON.stringify({
+const TV = { id: 'd-tv', name: 'Living Room', match: 'Living Room' };
+const existing = (serverIds, libraries, { legacy = false } = {}) => JSON.stringify({
   platform: 'PlexIntermission', name: 'Intermission', setupId: 'x',
   servers: serverIds.map((id) => ({ id, name: id === 'srv' ? 'Unraid' : 'Cabin', url: `http://${id}` })),
-  selection: { players: [{ id: 'ATV', name: 'Living Room' }], allUsers: true, users: [], allPlayers: false, allLibraries: false,
+  ...(legacy ? {} : { devices: [TV] }),
+  selection: { players: legacy ? [{ id: 'ATV', name: 'Living Room' }] : [], devices: legacy ? [] : [TV], exceptPlayers: [], allUsers: true, users: [], allPlayers: false, allLibraries: false,
     libraries: libraries.map((key) => ({ key, title: key, kind: key.endsWith('/2') ? 'show' : 'movie', serverId: key.split('/')[0], serverName: key.split('/')[0] })) },
-  sensors: ['playing', 'paused', 'credits', 'idle'].map((state) => ({ id: state, name: state, type: 'occupancy', state, filters: { players: ['ATV'], users: [], libraries: [...libraries] } })),
+  sensors: ['playing', 'paused', 'credits', 'idle'].map((state) => ({ id: state, name: state, type: 'occupancy', state,
+    filters: { players: legacy ? ['ATV'] : [], ...(legacy ? {} : { devices: ['d-tv'], exceptPlayers: [] }), users: [], libraries: [...libraries] } })),
 });
 
 await flow('one server: chosen automatically, Movies and TV preselected, preset saved', async () => {
@@ -564,7 +567,7 @@ await flow('Sensor editor: names, types, states, exceptions, events, filters and
   await click(page, '[data-action=add][data-type=occupancy]');
   let c = await config(page);
   let sensor = c.sensors.at(-1);
-  assert.deepEqual(sensor.filters, { players: ['ATV'], users: [], libraries: ['srv/1', 'srv/2'] }, 'a new sensor starts from the setup choices');
+  assert.deepEqual(sensor.filters, { players: [], devices: ['d-tv'], exceptPlayers: [], users: [], libraries: ['srv/1', 'srv/2'] }, 'a new sensor starts from the setup choices');
   const get = async () => (await config(page)).sensors.find((x) => x.id === sensor.id);
 
   await setField(page, '#im-name', '🎬 Movie Night!');
@@ -593,10 +596,14 @@ await flow('Sensor editor: names, types, states, exceptions, events, filters and
   sensor = await get();
   assert.deepEqual([sensor.type, sensor.state, sensor.except], ['contact', 'playing', ['credits']]);
 
-  await click(page, '[data-action=toggle-filter-players][data-id=LG]');
-  assert.deepEqual((await get()).filters.players, ['ATV', 'LG']);
-  await click(page, '[data-action=filter-all][data-id=players]');
-  assert.deepEqual((await get()).filters.players, []);
+  await click(page, '[data-action=toggle-filter-device][data-id="new:Bedroom TV"]');
+  const devices = (await config(page)).devices;
+  const bedroom = devices.find((d) => d.match === 'Bedroom TV');
+  assert.deepEqual((await get()).filters.devices, ['d-tv', bedroom.id], 'a device from Plex becomes a device when picked');
+  await click(page, '[data-action=toggle-filter-device][data-id="dev:d-tv"]');
+  assert.deepEqual((await get()).filters.devices, [bedroom.id]);
+  await click(page, '[data-action=filter-all][data-id=devices]');
+  assert.deepEqual([(await get()).filters.devices, (await get()).filters.players], [[], []]);
   await click(page, '[data-action=toggle-filter-users][data-id=Jen]');
   assert.deepEqual((await get()).filters.users, ['Jen']);
   await click(page, '[data-action=toggle-filter-libraries][data-id="srv/3"]');
@@ -671,39 +678,112 @@ await flow('Diagnostics: Watch live updates in place, and stops on another tab',
   assert.equal(await page.$('#im-live-log'), null);
 });
 
-await flow('Same-name players: chips show the app; a player added in setup reaches the sensors', async () => {
-  const { page } = await open({ s: 'main', servers: 'srv', twin: '1', existing: existing(['srv'], ['srv/1', 'srv/2']) });
+const toChoose = async (page) => {
   await click(page, '[data-action=tab][data-id=advanced]');
   await click(page, '[data-action=redo-setup]');
   await page.waitForTimeout(300);
-  await click(page, '[data-action=use-servers]').catch(() => undefined);
   await page.click('[data-action=webhooks-next]').catch(() => undefined);
   await page.waitForTimeout(300);
-  await click(page, '[data-action=toggle-player][data-id="1AF4CEC1-CE71"]');
+};
+
+await flow('Devices: one card per device; Choose apps lists its apps; unticking one leaves it out', async () => {
+  const { page } = await open({ s: 'main', servers: 'srv', twin: '1', existing: existing(['srv'], ['srv/1', 'srv/2']) });
+  await toChoose(page);
+  assert.equal(await page.$$eval('[data-action=toggle-device][data-id="Living Room"]', (els) => els.length), 1, 'two apps, one card');
+  assert.match(await page.textContent('[data-action=toggle-device][data-id="Living Room"]'), /2 apps/);
+  assert.equal(await page.getAttribute('[data-action=toggle-device][data-id="Living Room"]', 'aria-pressed'), 'true');
+  await click(page, '[data-action=device-apps][data-id=d-tv]');
+  const panel = await page.textContent('.im-device');
+  assert.match(panel, /Infuse/);
+  assert.match(panel, /ID 1AF4CEC1/);
+  assert.match(panel, /including apps added or reinstalled later/);
+  await page.uncheck('[data-device-app="1AF4CEC1-CE71"]');
+  await page.waitForTimeout(200);
+  assert.match(await page.textContent('.im-device'), /1 of 2 apps/);
   await click(page, '[data-action=to-template]');
   const c = await config(page);
-  assert.ok(c.sensors.every((s) => s.filters.players.join() === 'ATV,1AF4CEC1-CE71'), JSON.stringify(c.sensors.map((s) => s.filters.players)));
-  assert.equal(await page.$('#im-missing-players'), null, 'nothing to offer');
-  assert.match(await page.textContent('.im-sensor .im-summary'), /Living Room \(Apple TV\).*Living Room \(Infuse\)/, 'summary tells them apart');
+  assert.ok(c.sensors.every((s) => s.filters.devices.join() === 'd-tv' && s.filters.exceptPlayers.join() === '1AF4CEC1-CE71'), JSON.stringify(c.sensors.map((s) => s.filters)));
+  assert.deepEqual(c.selection.exceptPlayers, ['1AF4CEC1-CE71']);
+  assert.match(await page.textContent('.im-sensor .im-summary'), /on Living Room \(not Infuse\)/);
   await click(page, '[data-action=edit]');
-  assert.match(await page.textContent('.im-editor'), /Living Room \(Infuse\)/);
+  assert.equal(await page.getAttribute('[data-action=toggle-filter-app][data-id="1AF4CEC1-CE71"]', 'aria-pressed'), 'false', 'editor shows the app left out');
+  await click(page, '[data-action=toggle-filter-app][data-id="1AF4CEC1-CE71"]');
+  assert.deepEqual((await config(page)).sensors[0].filters.exceptPlayers, []);
 });
 
-await flow('Same-name players: sensors saved before the fix are offered the missing player', async () => {
-  const saved = JSON.parse(existing(['srv'], ['srv/1', 'srv/2']));
-  saved.selection.players.push({ id: '1AF4CEC1-CE71', name: 'Living Room', product: 'Infuse' });
-  const { page } = await open({ s: 'main', servers: 'srv', twin: '1', existing: JSON.stringify(saved) });
-  assert.match(await page.textContent('#im-missing-players'), /Living Room \(Infuse\).*not on 4 sensors|not on 4 sensors[\s\S]*Living Room \(Infuse\)/);
-  await click(page, '[data-action=add-missing-players]');
-  assert.equal(await page.$('#im-missing-players'), null);
-  assert.ok((await config(page)).sensors.every((s) => s.filters.players.includes('1AF4CEC1-CE71')));
+await flow('Devices: choosing a device and All players in setup', async () => {
+  const { page } = await open({ s: 'main', servers: 'srv', twin: '1', existing: existing(['srv'], ['srv/1', 'srv/2']) });
+  await toChoose(page);
+  await click(page, '[data-action=toggle-device][data-id="Bedroom TV"]');
+  await click(page, '[data-action=toggle-device][data-id="Living Room"]');
+  await click(page, '[data-action=to-template]');
+  let c = await config(page);
+  const bedroom = c.devices.find((d) => d.match === 'Bedroom TV');
+  assert.ok(bedroom && !c.devices.some((d) => d.id === 'd-tv'), 'unused devices are dropped');
+  assert.ok(c.sensors.every((s) => s.filters.devices.join() === bedroom.id));
+  await toChoose(page);
+  await click(page, '[data-action=players-all]');
+  await click(page, '[data-action=to-template]');
+  c = await config(page);
+  assert.ok(c.sensors.every((s) => s.filters.devices.length === 0 && s.filters.players.length === 0));
+});
 
+await flow('Migration: choices made app by app move to devices, without adding apps', async () => {
+  const { page } = await open({ s: 'main', servers: 'srv', twin: '1', existing: existing(['srv'], ['srv/1', 'srv/2'], { legacy: true }) });
+  assert.match(await page.textContent('#im-migrated'), /now chosen by device/);
+  const c = await config(page);
+  const tv = c.devices.find((d) => d.match === 'Living Room');
+  assert.ok(c.sensors.every((s) => s.filters.devices.join() === tv.id && s.filters.players.length === 0 && s.filters.exceptPlayers.join() === '1AF4CEC1-CE71'));
+  assert.deepEqual(c.selection.exceptPlayers, ['1AF4CEC1-CE71'], 'Infuse was not chosen, so it stays out');
+  assert.equal(await page.$('#im-missing-players'), null);
+  assert.match(await page.textContent('.im-banner-title, .im-card'), /unsaved|Save/i);
+  await click(page, '[data-action=dismiss-migrated]');
+  assert.equal(await page.$('#im-migrated'), null);
+
+  const saved = JSON.parse(existing(['srv'], ['srv/1', 'srv/2'], { legacy: true }));
+  saved.selection.players.push({ id: '1AF4CEC1-CE71', name: 'Living Room', product: 'Infuse' });
   const { page: other } = await open({ s: 'main', servers: 'srv', twin: '1', existing: JSON.stringify(saved) });
-  await click(other, '[data-action=dismiss-missing-players]');
+  assert.match(await other.textContent('#im-missing-players'), /Infuse/);
+  await click(other, '[data-action=add-missing-players]');
   assert.equal(await other.$('#im-missing-players'), null);
-  const c = await config(other);
-  assert.deepEqual(c.selection.dismissedPlayers, ['1AF4CEC1-CE71']);
-  assert.ok(c.sensors.every((s) => s.filters.players.join() === 'ATV'), 'sensors unchanged');
+  assert.ok((await config(other)).sensors.every((s) => s.filters.exceptPlayers.length === 0));
+});
+
+await flow('Two devices with one name: This one narrows the device to the apps at its address', async () => {
+  const { page } = await open({ s: 'main', servers: 'srv', twin: '1', seen: 'shared', existing: existing(['srv'], ['srv/1', 'srv/2']) });
+  await toChoose(page);
+  assert.match(await page.textContent('#im-shared-name'), /Two devices report the name "Living Room"/);
+  await click(page, '[data-action=this-one]');
+  assert.equal(await page.$('#im-shared-name'), null);
+  await page.fill('[data-device-label]', 'Theater');
+  await page.dispatchEvent('[data-device-label]', 'change');
+  await page.waitForTimeout(200);
+  await click(page, '[data-action=to-template]');
+  const c = await config(page);
+  const theater = c.devices.find((d) => d.name === 'Theater');
+  assert.deepEqual(theater.apps, ['ATV', '1AF4CEC1-CE71'], 'the apps at the playing app\'s address, not the bedroom one');
+  assert.ok(c.sensors.every((s) => s.filters.devices.join() === theater.id));
+  assert.match(await page.textContent('.im-sensor .im-summary'), /on Theater/);
+});
+
+await flow('New Plex ID on a device narrowed to its apps: offered, then added to the device', async () => {
+  const saved = JSON.parse(existing(['srv'], ['srv/1', 'srv/2']));
+  const pinned = { ...TV, apps: ['ATV'] };
+  Object.assign(saved, { devices: [pinned] });
+  saved.selection.devices = [pinned];
+  const { page } = await open({ s: 'main', servers: 'srv', seen: '1', existing: JSON.stringify(saved) });
+  const text = await page.textContent('#im-new-players');
+  assert.match(text, /Living Room \(Plex for Apple TV\), ID lcn8wszv/);
+  await click(page, '[data-action=add-new-player]');
+  assert.equal(await page.$('#im-new-players'), null);
+  const c = await config(page);
+  assert.deepEqual(c.devices[0].apps, ['ATV', 'lcn8wszvp5by']);
+
+  const { page: followed } = await open({ s: 'main', servers: 'srv', seen: 'followed', existing: JSON.stringify(saved) });
+  assert.match(await followed.textContent('#im-new-players'), /already follow it/);
+  await click(followed, '[data-action=dismiss-new-player]');
+  assert.equal(await followed.$('#im-new-players'), null);
+  assert.deepEqual((await config(followed)).selection.dismissedPlayers, ['lcn8wszvp5by']);
 });
 
 await flow('Webhooks: remove an old address, add Intermission\'s, remove it again', async () => {

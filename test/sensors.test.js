@@ -162,3 +162,12 @@ test('the reason a player is ignored names its app, or the start of its ID', () 
   assert.equal(unmark(filterMismatch(filters, context, { player: 'Apple TV' })), 'player Apple TV (1AF4CEC1) is not chosen');
   assert.equal(filterMismatch(filters, { playerId: 'ATV-PLEX' }), undefined);
 });
+
+test('home: Plex says local, or the address is private', async () => {
+  const { isHome, isPrivateAddress } = await import('../dist/sensors/rules.js');
+  for (const a of ['10.1.2.3', '192.168.0.9', '172.16.0.1', '172.31.255.1', 'fd12::1', '::ffff:192.168.1.5']) assert.ok(isPrivateAddress(a), a);
+  for (const a of ['172.32.0.1', '73.14.2.9', '100.64.0.1', undefined]) assert.ok(!isPrivateAddress(a), String(a));
+  assert.equal(isHome({ local: false, address: '192.168.1.5' }), true);
+  assert.equal(isHome({ local: false, address: '73.14.2.9' }), false);
+  assert.equal(isHome({}), undefined);
+});

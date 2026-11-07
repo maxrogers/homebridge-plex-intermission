@@ -1,4 +1,4 @@
-import type { Exception, MediaConditions, SensorFilters, StateCondition } from '../config.js';
+import type { DeviceConfig, Exception, MediaConditions, SensorFilters, StateCondition } from '../config.js';
 import { person, player as playerName } from '../diagnostics.js';
 import { WIDE_ASPECT, type MediaFacts } from '../plex/media-facts.js';
 import type { MediaInfo, PlayerSnapshot, SessionInfo } from '../engine/types.js';
@@ -8,12 +8,70 @@ export interface MatchContext {
   /** The server the event came from. Library filters may name `serverId/sectionId`. */
   serverId?: string;
   playerId?: string;
+  /** Chosen players this player is followed as, after Plex gave it a new ID (see PlayerBook). */
+  followedAs?: readonly string[];
+  /** The name the player reports, for device filters. */
+  playerName?: string;
+  /** Whether the player is on the home network: Plex says it is local, or its address is private. */
+  home?: boolean;
   user?: string;
   media?: MediaInfo;
 }
 
-export function contextOf(session: SessionInfo | undefined, media?: MediaInfo, serverId?: string): MatchContext {
-  return { serverId, playerId: session?.playerId, user: session?.user, media: session?.media ?? media };
+export function contextOf(session: SessionInfo | undefined, media?: MediaInfo, serverId?: string, extra: Partial<MatchContext> = {}): MatchContext {
+  const context: MatchContext = { serverId, playerId: session?.playerId, user: session?.user, media: session?.media ?? media };
+  if (extra.followedAs?.length) {
+    context.followedAs = extra.followedAs;
+  }
+  const name = extra.playerName ?? session?.playerTitle;
+  if (name !== undefined) {
+    context.playerName = name;
+  }
+  const home = extra.home ?? isHome(session);
+  if (home !== undefined) {
+    context.home = home;
+  }
+  return context;
+}
+
+const PRIVATE = /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|fd|fc|fe80:|::1$)/i;
+
+/** A private (LAN or VPN) address: a player outside the home reaches the server from a public one. */
+export function isPrivateAddress(address: string | undefined): boolean {
+  return address !== undefined && PRIVATE.test(address.replace(/^::ffff:/i, ''));
+}
+
+/** Home if Plex calls the player local or its address is private; undefined when neither is known. */
+export function isHome(player: { local?: boolean; address?: string } | undefined): boolean | undefined {
+  if (player?.local === true || isPrivateAddress(player?.address)) {
+    return true;
+  }
+  return player?.local === false ? false : undefined;
+}
+
+const sameName = (a?: string, b?: string) => a !== undefined && b !== undefined && a.trim().toLowerCase() === b.trim().toLowerCase();
+
+function hasApp(ids: readonly string[], context: MatchContext): boolean {
+  return (context.playerId !== undefined && ids.includes(context.playerId)) || (context.followedAs ?? []).some((id) => ids.includes(id));
+}
+
+/** Whether a playback is on a device: one of its apps, or any app reporting its name on the home network. */
+export function onDevice(device: DeviceConfig, context: MatchContext): boolean {
+  if (device.apps.length > 0) {
+    return hasApp(device.apps, context);
+  }
+  return device.match !== undefined && sameName(device.match, context.playerName) && context.home === true;
+}
+
+function playerAllowed(filters: SensorFilters, context: MatchContext): boolean {
+  if (context.playerId !== undefined && (filters.exceptPlayers ?? []).includes(context.playerId)) {
+    return false;
+  }
+  const devices = filters.devices ?? [];
+  if (filters.players.length === 0 && devices.length === 0) {
+    return true;
+  }
+  return hasApp(filters.players, context) || devices.some((device) => onDevice(device, context));
 }
 
 /** An empty filter allows everything; a non-empty one must contain the value. */
@@ -23,7 +81,7 @@ export function matchesFilters(filters: SensorFilters, context: MatchContext): b
   const section = context.media?.librarySectionId;
   const library = filters.libraries.length === 0 || (section !== undefined
     && (filters.libraries.includes(section) || (context.serverId !== undefined && filters.libraries.includes(`${context.serverId}/${section}`))));
-  return allows(filters.players, context.playerId) && allows(filters.users, context.user) && library;
+  return playerAllowed(filters, context) && allows(filters.users, context.user) && library;
 }
 
 export function stateHolds(condition: StateCondition, snapshot: PlayerSnapshot, except: readonly Exception[] = []): boolean {
@@ -97,7 +155,15 @@ export function filterMismatch(
   context: MatchContext,
   names: { player?: string; product?: string; library?: string } = {},
 ): string | undefined {
-  if (filters.players.length > 0 && (context.playerId === undefined || !filters.players.includes(context.playerId))) {
+  if (context.playerId !== undefined && (filters.exceptPlayers ?? []).includes(context.playerId)) {
+    return `player ${playerName(names.player ?? context.playerId)}${names.player ? ` (${names.product ?? context.playerId.slice(0, 8)})` : ''} is left out of its device`;
+  }
+  if (!playerAllowed(filters, context)) {
+    const devices = filters.devices ?? [];
+    const named = devices.find((d) => d.apps.length === 0 && sameName(d.match, context.playerName));
+    if (named && context.home !== true) {
+      return `player ${playerName(names.player ?? context.playerId ?? 'unknown')} is not on the home network (${context.home === false ? 'Plex says it is remote' : 'its address is unknown'})`;
+    }
     // The app or ID tells apart players with the same name, such as two apps on one Apple TV.
     const tell = names.product ?? context.playerId?.slice(0, 8);
     return `player ${playerName(names.player ?? context.playerId ?? 'unknown')}${names.player && tell ? ` (${tell})` : ''} is not chosen`;
@@ -105,7 +171,7 @@ export function filterMismatch(
   if (filters.users.length > 0 && (context.user === undefined || !filters.users.includes(context.user))) {
     return `${context.user === undefined ? 'the person is unknown' : `${person(context.user)} is not chosen`}`;
   }
-  if (!matchesFilters({ ...filters, players: [], users: [] }, context)) {
+  if (!matchesFilters({ ...filters, players: [], devices: [], exceptPlayers: [], users: [] }, context)) {
     return `library ${names.library ?? context.media?.librarySectionId ?? 'unknown'} is not chosen`;
   }
   return undefined;

@@ -92,7 +92,7 @@ export function guideTab(sensors, collapsible) {
       <li>Use color: a warm scene for the credits, a dim blue for pause.</li>
       <li>Several light zones: give each its own steps in the same shortcut, for example sconces a step ahead of the overhead lights.</li>
       <li>Go beyond lights: close the shades on Media Playing, open them on Nothing Playing, or switch a fan or soundbar.</li>
-      <li>One sensor per room: give each sensor its own player (Edit, Players), for example "Bedroom Playing".</li>
+      <li>One sensor per room: give each sensor its own device (Edit, Players), for example "Bedroom Playing".</li>
     </ul></div>
 `,
   }, inUse)}

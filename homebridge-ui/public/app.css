@@ -76,6 +76,12 @@
 /* Surfaces */
 .im .im-card { border: 1px solid var(--im-border); border-radius: var(--im-radius); padding: 0.9rem 1rem; margin-bottom: 0.75rem; }
 .im .im-banner { border-left: 4px solid var(--im-accent); background: var(--im-accent-soft); }
+.im .im-pick .im-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem; opacity: 0.8; }
+.im .im-device { padding: 0.6rem 0.8rem; }
+.im .im-device .im-rows { margin-top: 0.3rem; }
+.im .im-subchips { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; margin: 0.4rem 0 0 0.2rem; }
+.im .im-chip-sm { font-size: 0.8rem; padding: 0.1rem 0.55rem; }
+.im .im-newplayer { border-top: 1px solid var(--im-border); margin-top: 0.6rem; padding-top: 0.2rem; }
 .im .im-alert { border: 1px solid var(--im-accent-line); background: var(--im-accent-soft); border-radius: 10px; padding: 0.6rem 0.9rem; margin-bottom: 0.75rem; }
 .im .im-alert-danger { border-color: var(--im-danger); background: transparent; color: var(--im-danger); }
 

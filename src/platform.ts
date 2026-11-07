@@ -22,6 +22,7 @@ import { configFingerprint } from './runtime.js';
 import { SensorAccessory } from './sensors/sensor-accessory.js';
 import { CommandHooks, SensorHub } from './sensors/sensor-hub.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
+import { PlayerBook } from './players.js';
 import { serverToken, Storage } from './storage.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -120,6 +121,8 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
     }
     this.log.debug('Settings: %s.', describeSettings(this.settings));
     const plexServers = servers.map((server) => new PlexServer({ baseUrl: server.url, token: serverToken(credentials, server.id), clientIdentifier: state.clientIdentifier }));
+    const players = new PlayerBook(storage, (message) => this.log.debug(message));
+    await players.load();
     const libraryTypes = new LibraryTypes(servers.map((server, index) => ({ serverId: server.id, libraries: () => plexServers[index]!.libraries() })));
     await libraryTypes.refresh();
 
@@ -138,6 +141,7 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
         hasCredits: (media) => libraryTypes.hasCredits(server.id, media),
         getFacts: (ratingKey) => plex.facts(ratingKey),
         sensors: hubs.map((hub) => hub.output(index)),
+        players,
       });
       this.controllers.push(controller);
       controller.start();

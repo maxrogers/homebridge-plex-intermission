@@ -9,6 +9,8 @@ export interface DiscoveredPlayer {
   product?: string;
   platform?: string;
   device?: string;
+  /** LAN address, known while it plays. */
+  address?: string;
   /** Plays in recent server history, across the chosen servers. */
   plays: number;
   lastUsedAt?: number;
@@ -124,6 +126,7 @@ export async function discover(servers: readonly ServerToDiscover[], plexTv: Ple
         name: session.playerTitle,
         product: session.product,
         platform: session.platform,
+        address: session.address,
         playingNow: true,
         lastUsedAt: Date.now(),
       });

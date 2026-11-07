@@ -6,6 +6,8 @@ export interface PlexPlayer {
   machineIdentifier?: string;
   product?: string;
   platform?: string;
+  /** The player's LAN address, in `/status/sessions`. */
+  address?: string;
   state?: string;
   local?: boolean | number | string;
 }
