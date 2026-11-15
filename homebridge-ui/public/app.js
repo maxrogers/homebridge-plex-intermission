@@ -1241,6 +1241,10 @@ function advancedTab() {
         <dt>Bridge</dt><dd>${state.config._bridge ? `Intermission's own bridge${state.pairing?.paired ? ', in the Home app' : ''}` : 'Main Homebridge bridge'}</dd>
       </dl>
       <p class="im-hint">These are the starting choices for new sensors. Each sensor can still be changed on its own.</p>
+      <div class="im-field">
+        <label for="im-extras"><strong>Trailers and extras</strong><small>Trailers (including the ones Plex plays before a movie), extras and featurettes aren't in any library. When on, they count as playback for sensors on a movie, TV or Other Videos library. Turn off if playing a trailer shouldn't change the lights.</small></label>
+        <div class="form-check form-switch"><input id="im-extras" class="form-check-input" type="checkbox" data-extras ${state.config.extras === false ? '' : 'checked'}></div>
+      </div>
       <div class="d-flex flex-wrap gap-2 mt-2">
         <button class="btn btn-sm btn-outline-secondary" data-action="redo-setup">Change servers, players and libraries</button>
         <button class="btn btn-sm ${state.confirming === 'signout' ? 'btn-danger' : 'btn-outline-danger'} ms-auto" data-action="signout">${state.confirming === 'signout' ? 'Tap again to sign out' : 'Sign out of Plex'}</button>
@@ -1909,6 +1913,7 @@ const actions = {
     delete state.config.timing;
     delete state.config.webhook;
     delete state.config.detailedLogging;
+    delete state.config.extras;
     homebridge.toast.success('All settings are back to their defaults. Press Save to keep them.');
     return changed();
   }),
@@ -2049,6 +2054,13 @@ root.addEventListener('change', (event) => {
     }
   } else if (el.hasAttribute('data-detailed')) {
     config.detailedLogging = el.checked;
+  } else if (el.hasAttribute('data-extras')) {
+    // On is the default, so only "off" is saved.
+    if (el.checked) {
+      delete config.extras;
+    } else {
+      config.extras = false;
+    }
   } else {
     return;
   }

@@ -104,8 +104,9 @@ Only a stop at the end can be followed by autoplay, so the wait depends on where
 - **Near the end** (in or past the first credits, the final 10% of the runtime, or the last 60 s): the stop hold,
   10 s by default, so the next episode never passes through Nothing Playing. An unknown position or runtime counts as
   near the end, except for Live TV.
-- **Anywhere else:** 1 s (or the stop hold, if shorter): long enough for players that stop and resume within
-  milliseconds, short enough that leaving a movie brings the lights up promptly.
+- **Anywhere else:** 0.25 s (or the stop hold, if shorter): long enough for players that stop and resume within
+  milliseconds (an iPhone seeking: 2 to 7 ms), short enough that leaving a movie brings the lights up promptly. In
+  three weeks of recorded use, playback never returned sooner than 2.9 s after such a stop.
 
 ### Session lookup
 
@@ -116,6 +117,19 @@ replaces it and sends `play` again so sensors re-check their filters.
 
 A player is forgotten when its playback ends, so players that come and go never pile up. A player already paused
 when it first appears (Homebridge restarted mid-pause) counts as paused once the pause has lasted the debounce.
+
+### Starting an item
+
+Play counts the moment Plex reports it, before the markers are read. The exception is a start in the final 15% of
+the runtime or past its end, which could be in the credits: that waits for the markers (at most 1.5 s, usually a few
+milliseconds), so a resume in the credits goes straight to the credits instead of through playing. Plex for Apple TV
+and Infuse report the previous item's position for the first moment of a new one, so a start that does land in the
+credits waits 2.5 s more, or until a report moves it out of the credits.
+
+**Trailers and extras** are in no library section. They count for a sensor whose libraries include a movie, TV or
+Other Videos library (and for sensors on all libraries), not for one limited to music or photos. The *Trailers and
+extras* setting (`extras: false`) turns them off for every sensor; Plex gives no reliable way to tell a trailer played
+before a movie from one played while browsing, so it is one switch rather than two.
 
 ### When Plex goes quiet
 
@@ -292,7 +306,8 @@ saved config and says whether changes are unsaved, saved but waiting for a resta
 | Credits offset | 0 s | 0 to 120 s after the marker |
 | Credits re-arm distance | 60 s | 20 to 600 s |
 | Pause debounce | 1.5 s | 0 to 30 s, half-second steps |
-| Stop hold (near the end) | 10 s | 0 to 60 s; other stops count after 1 s |
+| Stop hold (near the end) | 10 s | 0 to 60 s; other stops count after 0.25 s |
+| Trailers and extras | On | Off: they count for no sensor |
 | Minimum item length | 0 (off) | 0 to 60 min |
 | Safety re-sync | 5 min | 0 (off) to 30 min, only while the stream is down |
 | Webhooks | On, port 32550, address detected | Port 1024 to 65535, or a manual address |

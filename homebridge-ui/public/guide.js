@@ -36,7 +36,7 @@ export function guideTab(sensors, collapsible) {
       <li>Movies and TV Shows get credits and intro handling. Music, Photos, Other Videos and Live TV just follow play, pause and stop.</li>
       <li>What counts as the credits is one setting shared by every sensor, so sensors that follow the credits always agree. By default a mid-credits scene counts as playing.</li>
       <li>A pause during the credits keeps "In the credits" sensors on, so a fade isn't interrupted.</li>
-      <li>Stopping partway through counts after 1 second. Autoplaying the next episode isn't a stop: when playback stops in the credits or near the end, sensors wait 10 seconds for the next episode before Nothing Playing turns on. If your player's countdown is longer, raise Settings, Advanced, <strong>Stop hold</strong>.</li>
+      <li>Stopping partway through counts after a quarter of a second. Autoplaying the next episode isn't a stop: when playback stops in the credits or near the end, sensors wait 10 seconds for the next episode before Nothing Playing turns on. If your player's countdown is longer, raise Settings, Advanced, <strong>Stop hold</strong>.</li>
       <li>After a Homebridge restart, sensors keep their last state until Plex has been read, so lights don't jump.</li>
       <li>Renaming a sensor keeps the automations that use it. If you renamed it in the Home app, Home keeps your name. Removing a sensor removes it from Apple Home.</li>
     </ul>`;

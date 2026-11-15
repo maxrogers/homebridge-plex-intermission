@@ -5,6 +5,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-11-15
+
+### Fixed
+
+- Trailers and extras (in no library) were ignored by sensors limited to libraries. They now count for sensors on a
+  movie, TV or Other Videos library. *Trailers and extras* in Settings turns them off for every sensor.
+- Starting a movie after another one could flash the lights: Plex for Apple TV and Infuse report the previous item's
+  position for the first moment of a new one, which looked like a start in the credits (lights down, up, down again).
+  A start in the final 15% of an item (or past its end) now checks the credits first, and one that lands in the credits
+  waits 2.5 seconds, or until Plex reports the real position. Every other start counts the moment Plex reports it.
+- Resuming a movie in its credits no longer passes through Playing first (lights down, then straight back up): it goes
+  straight to Credits Rolling.
+- A read of Plex's session list asked for while another was running was skipped, so a stop reported in between could
+  be missed until the next check. It now runs after the first one.
+- Right after start or a reconnect, a playback that ended before Plex finished describing it kept the sensors as they
+  were for up to 20 seconds.
+
+### Changed
+
+- Stopping partway through counts after a quarter of a second instead of 1 second, so the lights come up sooner.
+
 ## [1.1.1] - 2026-11-14
 
 ### Fixed
@@ -132,7 +153,8 @@ First public release.
   Home app.
 - Lost connections to Plex are retried with their reasons logged, with a warning if Plex stays unreachable.
 
-[Unreleased]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.1.2...HEAD
+[1.1.2]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.0.0...v1.0.1

@@ -119,7 +119,7 @@ export const TIMING_FIELDS = [
   { key: 'creditsOffset', label: 'Credits offset', help: 'Wait this long after the credits marker. Never earlier than the marker.', unit: 's', min: 0, max: 120, default: 0 },
   { key: 'rearmDistance', label: 'Credits re-arm distance', help: 'Rewinds shorter than this never change the credits state, so the rewind Plex does on resume can\'t flick a sensor.', unit: 's', min: 20, max: 600, default: 60 },
   { key: 'pauseDebounce', label: 'Pause debounce', help: 'Pauses shorter than this are ignored, so skips and quick pause-play bursts don\'t change any sensor. Apple TV skips take up to about 1.3 seconds.', unit: 's', min: 0, max: 30, step: 0.5, default: 1.5 },
-  { key: 'stopHold', label: 'Stop hold', help: 'After playback stops near the end of an item, sensors keep their state this long in case the next episode autoplays. A stop anywhere else counts after 1 second. Raise it if your player\'s autoplay countdown is longer.', unit: 's', min: 0, max: 60, default: 10 },
+  { key: 'stopHold', label: 'Stop hold', help: 'After playback stops near the end of an item, sensors keep their state this long in case the next episode autoplays. A stop anywhere else counts after a quarter of a second. Raise it if your player\'s autoplay countdown is longer.', unit: 's', min: 0, max: 60, default: 10 },
   { key: 'minItemLength', label: 'Minimum item length', help: 'Shorter items, such as trailers, are ignored. 0 turns this off.', unit: 'min', scale: 60, min: 0, max: 60, default: 0 },
   { key: 'safetyResync', label: 'Safety re-sync', help: 'How often to re-read playback while the connection to Plex is down and something is playing. 0 turns this off.', unit: 'min', scale: 60, storedIn: 'min', min: 0, max: 30, default: 5 },
 ];

@@ -171,3 +171,16 @@ test('home: Plex says local, or the address is private', async () => {
   assert.equal(isHome({ local: false, address: '73.14.2.9' }), false);
   assert.equal(isHome({}), undefined);
 });
+
+test('trailers and extras: by video library, and none when turned off', async () => {
+  const { matchesFilters } = await import('../dist/sensors/rules.js');
+  const trailer = { ratingKey: '9', title: 'Trailer', type: 'clip' };
+  const isVideoLibrary = (key) => key === 's/1';
+  const filters = (libraries) => ({ players: [], users: [], libraries });
+  assert.ok(matchesFilters(filters(['s/1']), { serverId: 's', media: trailer, isVideoLibrary }));
+  assert.ok(!matchesFilters(filters(['s/4']), { serverId: 's', media: trailer, isVideoLibrary }), 'music only');
+  assert.ok(matchesFilters(filters([]), { serverId: 's', media: trailer, isVideoLibrary }), 'all libraries');
+  assert.ok(!matchesFilters(filters([]), { serverId: 's', media: trailer, isVideoLibrary, extras: false }), 'turned off');
+  assert.ok(!matchesFilters(filters(['s/1']), { serverId: 's', media: trailer, isVideoLibrary, extras: false }));
+  assert.ok(matchesFilters(filters(['s/1']), { serverId: 's', media: { ...trailer, librarySectionId: '1' }, extras: false }), 'library items are unaffected');
+});

@@ -492,12 +492,25 @@ await flow('Settings: credits, fallback, webhook options and detailed logging', 
   assert.equal((await config(page)).detailedLogging, false);
 });
 
+await flow('Settings: Trailers and extras can be turned off and on; on is the default and is not saved', async () => {
+  const { page } = await open({ s: 'main' });
+  await settingsTab(page);
+  assert.equal(await page.isChecked('[data-extras]'), true);
+  await page.uncheck('[data-extras]');
+  await page.waitForTimeout(200);
+  assert.equal((await config(page)).extras, false);
+  await page.check('[data-extras]');
+  await page.waitForTimeout(200);
+  assert.equal('extras' in (await config(page)), false);
+});
+
 await flow('Settings: Reset all settings needs two taps and clears only settings', async () => {
   const { page } = await open({ s: 'main' });
   await settingsTab(page);
   await openSection(page, 'advanced');
   await setField(page, '#im-stopHold', 20);
   await page.check('#im-detailed');
+  await page.uncheck('[data-extras]');
   await openSection(page, 'reset');
   await click(page, '[data-action=reset-advanced]');
   assert.equal((await config(page)).timing.stopHold, 20, 'one tap only asks');
@@ -505,6 +518,7 @@ await flow('Settings: Reset all settings needs two taps and clears only settings
   const c = await config(page);
   assert.equal(c.timing, undefined);
   assert.equal(c.detailedLogging, undefined);
+  assert.equal(c.extras, undefined, 'trailers and extras back on');
   assert.equal(c.sensors.length, 5, 'sensors stay');
 });
 

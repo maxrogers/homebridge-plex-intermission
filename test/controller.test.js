@@ -487,3 +487,28 @@ test('a play whose stop was missed while its session was being looked up ends at
   assert.equal(sensors.playing.active, true, 'a real play still starts, from a placeholder if need be');
   await controller.stop();
 });
+
+test('a read asked for while one is running happens after it, so nothing missed in between is lost', async () => {
+  let release;
+  let listed = [notify('playing', 10_000)];
+  let reads = 0;
+  const { clock, stream, controller, sensors } = setup({
+    playing: () => {
+      reads++;
+      const now = listed;
+      return reads === 1 ? new Promise((resolve) => { release = () => resolve(now); }) : now;
+    },
+  });
+  await controller.start();
+  // The first read is slow; the stream connects meanwhile, and the stop it reported is missed.
+  listed = [];
+  stream.connect();
+  release();
+  await settle();
+  await settle();
+  await clock.advance(20_000);
+  assert.equal(reads, 2, 'read again once the first read finished');
+  assert.equal(sensors.playing.active, false);
+  assert.equal(sensors.idle.active, true);
+  await controller.stop();
+});

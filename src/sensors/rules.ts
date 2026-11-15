@@ -14,12 +14,25 @@ export interface MatchContext {
   playerName?: string;
   /** Whether the player is on the home network: Plex says it is local, or its address is private. */
   home?: boolean;
+  /**
+   * Whether a library (`serverId/sectionId`) holds video. Trailers and extras are in no library, so
+   * they count for a sensor whose libraries include a video library.
+   */
+  isVideoLibrary?: (key: string) => boolean;
+  /** False when trailers and extras are turned off in Settings: then they count for no sensor. */
+  extras?: boolean;
   user?: string;
   media?: MediaInfo;
 }
 
 export function contextOf(session: SessionInfo | undefined, media?: MediaInfo, serverId?: string, extra: Partial<MatchContext> = {}): MatchContext {
   const context: MatchContext = { serverId, playerId: session?.playerId, user: session?.user, media: session?.media ?? media };
+  if (extra.isVideoLibrary) {
+    context.isVideoLibrary = extra.isVideoLibrary;
+  }
+  if (extra.extras === false) {
+    context.extras = false;
+  }
   if (extra.followedAs?.length) {
     context.followedAs = extra.followedAs;
   }
@@ -79,8 +92,11 @@ export function matchesFilters(filters: SensorFilters, context: MatchContext): b
   const allows = (values: readonly string[], actual: string | undefined) =>
     values.length === 0 || (actual !== undefined && values.includes(actual));
   const section = context.media?.librarySectionId;
-  const library = filters.libraries.length === 0 || (section !== undefined
-    && (filters.libraries.includes(section) || (context.serverId !== undefined && filters.libraries.includes(`${context.serverId}/${section}`))));
+  const extra = context.media !== undefined && section === undefined;
+  const library = extra
+    ? context.extras !== false && (filters.libraries.length === 0 || filters.libraries.some((key) => context.isVideoLibrary?.(key) === true))
+    : filters.libraries.length === 0 || (section !== undefined
+      && (filters.libraries.includes(section) || (context.serverId !== undefined && filters.libraries.includes(`${context.serverId}/${section}`))));
   return playerAllowed(filters, context) && allows(filters.users, context.user) && library;
 }
 
@@ -172,7 +188,12 @@ export function filterMismatch(
     return `${context.user === undefined ? 'the person is unknown' : `${person(context.user)} is not chosen`}`;
   }
   if (!matchesFilters({ ...filters, players: [], devices: [], exceptPlayers: [], users: [] }, context)) {
-    return `library ${names.library ?? context.media?.librarySectionId ?? 'unknown'} is not chosen`;
+    if (context.media?.librarySectionId === undefined) {
+      return context.extras === false
+        ? 'it is a trailer or extra, and those are turned off in Settings'
+        : 'it is not in a library (a trailer or extra), and no video library is chosen';
+    }
+    return `library ${names.library ?? context.media.librarySectionId} is not chosen`;
   }
   return undefined;
 }

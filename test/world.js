@@ -52,6 +52,8 @@ export class FakePlex {
   /** Leaves new sessions out of /status/sessions, as Plex sometimes does for a moment. */
   hideSessions = false;
   liveTv = false;
+  /** Slows item (marker) reads, as a busy server does. */
+  metadataDelayMs = 0;
   nextSessionKey = 1;
 
   constructor({ id = 'server-1', name = 'Plex', token = 'account-token' } = {}) {
@@ -155,6 +157,11 @@ export class FakePlex {
       return json(response, { MediaContainer: { MediaProvider: this.liveTv ? [{ identifier: 'tv.plex.providers.epg.cloud', protocols: 'livetv' }] : [] } });
     }
     const match = /^\/library\/metadata\/(\w+)$/.exec(url.pathname);
+    if (match && this.metadataDelayMs > 0 && !request.delayed) {
+      request.delayed = true;
+      setTimeout(() => this.handle(request, response), this.metadataDelayMs);
+      return undefined;
+    }
     if (match) {
       return json(response, { MediaContainer: { Metadata: this.items.has(match[1]) ? [this.metadata(match[1])] : [] } });
     }
@@ -323,7 +330,8 @@ export async function startHome(t, { config, plexTv, signedIn = true, serverToke
   root ??= await mkdtemp(join(tmpdir(), 'intermission-world-'));
   const storage = root;
   if (!previous) {
-    await rm(join(storage, 'intermission'), { recursive: true, force: true });
+    // A home from the previous test may still be writing its files.
+    await rm(join(storage, 'intermission'), { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
     await mkdir(join(storage, 'intermission'), { recursive: true });
     if (players) {
       await writeFile(join(storage, 'intermission', 'players.json'), JSON.stringify(players));

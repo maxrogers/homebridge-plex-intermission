@@ -416,8 +416,9 @@ test('Homebridge restarts after playback ended: the stale state is corrected', a
 
 test('autoplay: the next episode, and a trailer before a movie, never pass through Nothing Playing', async (t) => {
   const { plex, plexTv, server } = await startPlex(t);
-  plex.items.set('trailer', { title: 'Trailer', type: 'clip', duration: 30_000, section: '1' });
-  const home = await startHome(t, { plexTv, config: { servers: [server], timing: { pauseDebounce: 0, stopHold: 2 }, sensors: everyState() } });
+  plex.items.set('trailer', { title: 'Trailer', type: 'clip', duration: 30_000 });
+  // Movies and TV Shows, as setup chooses them: a trailer, which is in no library, still counts.
+  const home = await startHome(t, { plexTv, config: { servers: [server], timing: { pauseDebounce: 0, stopHold: 2 }, sensors: everyState({ libraries: [`${server.id}/1`, `${server.id}/2`] }) } });
   await home.waitActive(['Nothing Playing']);
   const seen = new Set();
   const watch = setInterval(() => home.active().forEach((name) => seen.add(name)), 5);
@@ -612,5 +613,75 @@ test('a session Plex does not list yet is looked up again, then adopted', async 
   await sleep(300);
   plex.hideSessions = false;
   await home.waitActive(['Media On'], 4_000);
+  assert.deepEqual(home.problems(), []);
+});
+
+test('trailers and extras count for sensors on video libraries, not for music-only ones', async (t) => {
+  const { plex, plexTv, server } = await startPlex(t);
+  plex.items.set('trailer', { title: 'One Night Only', type: 'clip', duration: 142_000 });
+  const sensors = [
+    sensor('movies', 'active', { name: 'Movies On', filters: { libraries: [`${server.id}/1`] } }),
+    sensor('music', 'active', { name: 'Music On', filters: { libraries: [`${server.id}/4`] } }),
+    sensor('all', 'active', { name: 'Anything On' }),
+  ];
+  const home = await startHome(t, { plexTv, config: { servers: [server], sensors } });
+  await home.waitLog(/Playback read from Plex/);
+  await plex.play(tv, 'trailer');
+  await home.waitActive(['Anything On', 'Movies On']);
+  await sleep(200);
+  assert.deepEqual(home.active(), ['Anything On', 'Movies On']);
+  await plex.stop_(tv);
+  await home.waitActive([]);
+  assert.deepEqual(home.problems(), []);
+});
+
+test('trailers and extras turned off in Settings: they count for no sensor, but movies still do', async (t) => {
+  const { plex, plexTv, server } = await startPlex(t);
+  plex.items.set('trailer', { title: 'One Night Only', type: 'clip', duration: 142_000 });
+  const sensors = [
+    sensor('movies', 'active', { name: 'Movies On', filters: { libraries: [`${server.id}/1`] } }),
+    sensor('all', 'active', { name: 'Anything On' }),
+  ];
+  const home = await startHome(t, { plexTv, config: { servers: [server], extras: false, sensors } });
+  await home.waitLog(/Playback read from Plex/);
+  assert.ok(home.logged(/trailers and extras off/), 'the start-up line says so');
+  await plex.play(tv, 'trailer');
+  await sleep(400);
+  assert.deepEqual(home.active(), []);
+  await plex.stop_(tv);
+  await plex.play(tv, 'movie');
+  await home.waitActive(['Anything On', 'Movies On']);
+  assert.deepEqual(home.problems(), []);
+});
+
+test('response time: play, pause, resume and stop reach the sensors without waiting for anything slow', async (t) => {
+  const { plex, plexTv, server } = await startPlex(t);
+  plex.metadataDelayMs = 800;
+  const port = await freePort();
+  plex.webhookUrl = `http://127.0.0.1:${port}/secret0123456789`;
+  const home = await startHome(t, { plexTv, config: { servers: [server], webhook: { port }, timing: { pauseDebounce: 1.5, stopHold: 10 }, sensors: everyState() } });
+  await home.waitActive(['Nothing Playing']);
+  const timed = async (action, want) => {
+    const started = Date.now();
+    await action();
+    await home.waitActive(want);
+    return Date.now() - started;
+  };
+  // With Plex Pass the webhook brings everything needed; the slow marker read is not waited for.
+  const play = await timed(() => plex.play(tv, 'movie', { offset: 60_000 }), ['Media Playing']);
+  assert.ok(play < 150, `play took ${play} ms`);
+  const pause = await timed(() => plex.pause(tv), ['Media Paused']);
+  assert.ok(pause >= 1_500 && pause < 1_700, `pause took ${pause} ms (the pause debounce is 1.5 s)`);
+  const resume = await timed(() => plex.resume(tv), ['Media Playing']);
+  assert.ok(resume < 100, `resume took ${resume} ms`);
+  plex.seek(tv, 120_000);
+  const stop = await timed(() => plex.stop_(tv), ['Nothing Playing']);
+  assert.ok(stop >= 250 && stop < 400, `a stop partway through took ${stop} ms`);
+
+  // Without the webhook, the session is read from the server first.
+  plex.webhookUrl = undefined;
+  const bare = await timed(() => plex.play(phone, 'episode', { offset: 0 }), ['Media Playing']);
+  assert.ok(bare < 200, `play from the notification alone took ${bare} ms`);
+  t.diagnostic(`play ${play} ms, pause ${pause} ms, resume ${resume} ms, stop ${stop} ms, play without webhook ${bare} ms`);
   assert.deepEqual(home.problems(), []);
 });

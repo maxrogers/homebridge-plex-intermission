@@ -62,6 +62,8 @@ interface PlayerRecord {
   stoppedRatingKey?: string;
   /** Retry of a session lookup that found nothing. */
   resolveTimer?: TimerHandle;
+  /** While set, the start of a new item waits for its markers, or for a start in the credits to be confirmed (see startItem). */
+  startTimer?: TimerHandle;
   /**
    * True when Plex's session list had no entry for this player and a placeholder session is in use.
    * The next webhook for the same item replaces it.
@@ -75,10 +77,10 @@ const ACTIVE = new Set<PlaybackState>(['playing', 'buffering']);
 const TIMER_TOLERANCE_MS = 1;
 
 /**
- * Hold for a stop away from the end of an item. Autoplay can't follow such a stop, but some players
- * report stopped and playing again within milliseconds while seeking.
+ * Hold for a stop away from the end of an item. Autoplay can't follow such a stop, but an iPhone
+ * seeking reports stopped and playing again 2 to 7 ms apart. Kept short: every stop waits this long.
  */
-export const QUICK_STOP_HOLD_MS = 1_000;
+export const QUICK_STOP_HOLD_MS = 250;
 
 /** A stop within this much of the end, or in the final tenth of the runtime, waits the full stop hold. */
 const END_ZONE_MS = 60_000;
@@ -90,6 +92,26 @@ const END_ZONE_FRACTION = 0.9;
  */
 const SESSION_RETRY_MS = 1_000;
 const SESSION_RETRIES = 2;
+
+/**
+ * A new item that starts this far into its runtime (or past its end) could be starting in the
+ * credits. Only such a start waits for the markers (MARKER_WAIT_MS at most); every other start
+ * counts at once. Credits markers sit in the final tenth or so of movies and episodes.
+ */
+const LATE_START_FRACTION = 0.85;
+
+/**
+ * How long a late start waits at most for its markers, so a start in the credits goes straight to
+ * the credits instead of passing through playing (lights down, then up again).
+ */
+const MARKER_WAIT_MS = 1_500;
+
+/**
+ * A new item that starts in the credits waits this long before it counts. Plex often reports the
+ * previous item's position for the first moment of a new one, then jumps to the real one; a real
+ * start in the credits (resuming at the end) still counts after this.
+ */
+const START_CONFIRM_MS = 2_500;
 
 /**
  * Turns Plex server notifications and webhooks into playback events per player.
@@ -343,22 +365,19 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
     }
 
     if (ACTIVE.has(player.raw)) {
-      player.activity = 'playing';
-      this.emitEvent(player, 'play');
-    } else if (player.raw === 'paused') {
-      // Already paused when it became known (Homebridge restarted, or the app opened on a paused
-      // item). It counts as a pause once it has lasted the debounce, like any other.
-      const enter = () => {
-        player.pauseTimer = undefined;
-        if (generation === player.generation && player.raw === 'paused' && player.activity === 'idle') {
-          this.enterPaused(player);
-        }
-      };
-      if (this.settings.pauseDebounceMs <= 0) {
-        enter();
+      const duration = session.media.durationMs;
+      const late = duration !== undefined && duration > 0 && player.positionKnown && this.position(player) >= duration * LATE_START_FRACTION;
+      if (late) {
+        player.startTimer = this.deps.clock.setTimeout(() => {
+          player.startTimer = undefined;
+          this.startItem(player, generation, false);
+        }, MARKER_WAIT_MS);
       } else {
-        player.pauseTimer = this.deps.clock.setTimeout(enter, this.settings.pauseDebounceMs);
+        // The usual case: playback counts the moment Plex reports it.
+        this.startItem(player, generation, false);
       }
+    } else if (player.raw === 'paused') {
+      this.knownPaused(player, generation);
     }
 
     const credited = Promise.resolve(this.deps.hasCredits?.(session.media) ?? CREDITED_TYPES.has(session.media.type))
@@ -370,6 +389,65 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
         void credited.then((hasCredits) => this.applyMarkers(player, generation, [], hasCredits));
       },
     );
+  }
+
+  /**
+   * Starts a new item once its markers are known (or MARKER_WAIT_MS has passed). A start in the
+   * credits waits START_CONFIRM_MS first, then goes straight to the credits, so neither a stale
+   * position nor a real resume at the end turns the lights down and up again.
+   */
+  private startItem(player: PlayerRecord, generation: number, confirmed: boolean): void {
+    if (generation !== player.generation || !player.ready || player.ignored) {
+      return;
+    }
+    if (player.startTimer !== undefined) {
+      this.deps.clock.clearTimeout(player.startTimer);
+      player.startTimer = undefined;
+    }
+    if (player.raw === 'paused') {
+      this.knownPaused(player, generation);
+      return;
+    }
+    if (!ACTIVE.has(player.raw)) {
+      return;
+    }
+    const inCredits = this.creditsAt(player, this.position(player)) !== undefined;
+    if (inCredits && !confirmed) {
+      this.deps.log.debug('%s: starts in the credits; waiting %ss in case Plex moves it', label(player), START_CONFIRM_MS / 1000);
+      player.startTimer = this.deps.clock.setTimeout(() => {
+        player.startTimer = undefined;
+        this.startItem(player, generation, true);
+      }, START_CONFIRM_MS);
+      return;
+    }
+    player.activity = 'playing';
+    player.inCredits = inCredits;
+    this.emitEvent(player, 'play');
+    if (inCredits) {
+      this.emitEvent(player, 'credits.start');
+    }
+    this.scheduleMarkers(player);
+  }
+
+  /** Already paused when it became known (Homebridge restarted, or the app opened on a paused item): a pause once it has lasted the debounce. */
+  private knownPaused(player: PlayerRecord, generation: number): void {
+    const enter = () => {
+      player.pauseTimer = undefined;
+      if (generation === player.generation && player.raw === 'paused' && player.activity === 'idle') {
+        this.enterPaused(player);
+      }
+    };
+    if (this.settings.pauseDebounceMs <= 0) {
+      enter();
+    } else if (player.pauseTimer === undefined) {
+      player.pauseTimer = this.deps.clock.setTimeout(enter, this.settings.pauseDebounceMs);
+    }
+  }
+
+  /** The credits range a position is in (from where it starts counting), or undefined. */
+  private creditsAt(player: PlayerRecord, position: number): CreditsRange | undefined {
+    const offset = this.settings.creditsOffsetMs;
+    return (player.credits ?? []).find((range) => position >= range.startMs + offset - TIMER_TOLERANCE_MS && position < range.endMs);
   }
 
   private applyMarkers(player: PlayerRecord, generation: number, markers: readonly Marker[], credited: boolean): void {
@@ -387,6 +465,10 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
         : player.credits.length === 0 ? 'none (no marker, and the percentage fallback is off)'
           : `${player.credits.map(range).join(', ')}${fromMarkers ? ` (${this.settings.creditsMode} mode)` : ` (no marker: ${this.settings.fallbackPercent}% of the runtime)`}`,
       player.intro.length === 0 ? 'none' : player.intro.map(range).join(', '));
+    if (player.startTimer !== undefined) {
+      this.startItem(player, generation, false);
+      return;
+    }
     this.scheduleMarkers(player);
   }
 
@@ -427,7 +509,7 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
       if (player.activity === 'paused') {
         player.activity = 'playing';
         this.emitEvent(player, 'resume');
-      } else if (player.activity === 'idle') {
+      } else if (player.activity === 'idle' && player.startTimer === undefined) {
         player.activity = 'playing';
         this.emitEvent(player, 'play');
       }
@@ -461,7 +543,7 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
     }
     player.raw = 'stopped';
     this.clearCreditsTimer(player);
-    for (const key of ['pauseTimer', 'introTimer'] as const) {
+    for (const key of ['pauseTimer', 'introTimer', 'startTimer'] as const) {
       if (player[key] !== undefined) {
         this.deps.clock.clearTimeout(player[key]);
         player[key] = undefined;
@@ -525,6 +607,14 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
    * state, so seeks and skips move the timers the moment Plex reports them.
    */
   private scheduleMarkers(player: PlayerRecord): void {
+    if (player.startTimer !== undefined) {
+      // Not started yet: waiting for markers, or to confirm a start in the credits. A report that
+      // moves it out of the credits settles that at once.
+      if (player.credits !== undefined && this.creditsAt(player, this.position(player)) === undefined) {
+        this.startItem(player, player.generation, true);
+      }
+      return;
+    }
     this.scheduleCredits(player);
     this.scheduleIntro(player);
   }
@@ -638,7 +728,7 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
 
   private clearTimers(player: PlayerRecord): void {
     this.clearCreditsTimer(player);
-    for (const key of ['pauseTimer', 'stopTimer', 'introTimer', 'resolveTimer'] as const) {
+    for (const key of ['pauseTimer', 'stopTimer', 'introTimer', 'resolveTimer', 'startTimer'] as const) {
       if (player[key] !== undefined) {
         this.deps.clock.clearTimeout(player[key]);
         player[key] = undefined;

@@ -10,6 +10,8 @@ import type { PlexLibrary } from './server.js';
 export class LibraryTypes {
   private readonly personal = new Set<string>();
   private readonly known = new Set<string>();
+  /** Movie, TV and Other Videos libraries, whose trailers and extras count for them. */
+  private readonly video = new Set<string>();
   private reading?: Promise<void>;
 
   constructor(private readonly sources: { serverId: string; libraries(): Promise<PlexLibrary[]> }[]) {}
@@ -20,7 +22,13 @@ export class LibraryTypes {
       for (const library of libraries ?? []) {
         const key = `${source.serverId}/${library.id}`;
         this.known.add(key);
-        if (libraryKind(library) === 'other') {
+        const kind = libraryKind(library);
+        if (kind === 'movie' || kind === 'show' || kind === 'other') {
+          this.video.add(key);
+        } else {
+          this.video.delete(key);
+        }
+        if (kind === 'other') {
           this.personal.add(key);
         } else {
           this.personal.delete(key);
@@ -30,6 +38,11 @@ export class LibraryTypes {
       this.reading = undefined;
     });
     return this.reading;
+  }
+
+  /** Whether a library (`serverId/sectionId`) holds video, so trailers and extras count for it. */
+  isVideo(key: string): boolean {
+    return this.video.has(key);
   }
 
   async hasCredits(serverId: string, media: { type: string; librarySectionId?: string; live?: boolean }): Promise<boolean> {

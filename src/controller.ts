@@ -67,6 +67,8 @@ export interface ControllerOptions {
   onUnauthorized?(): void;
   /** Remembers players as they play, and follows a chosen player that Plex gives a new ID. */
   players?: PlayerBook;
+  /** Whether a library (`serverId/sectionId`) holds video; trailers and extras count for those. */
+  isVideoLibrary?(key: string): boolean;
   /** Overrides GONE_CHECK_MS, for tests. */
   goneCheckMs?: number;
 }
@@ -100,6 +102,9 @@ export class Controller {
   private ready = false;
   private readyTimer?: TimerHandle;
   private resyncing = false;
+  private resyncAgain = false;
+  /** Whether Plex's session list has been read since start. */
+  private hasRead = false;
   private goneTimer?: TimerHandle;
   /** Active players that were missing from Plex's session list at the last check. */
   private readonly missing = new Set<string>();
@@ -132,7 +137,10 @@ export class Controller {
     this.deviceNames = new Set(devices.filter((d) => d.apps.length === 0 && d.match).map((d) => d.match!.trim().toLowerCase()));
     this.needsFacts = options.getFacts !== undefined && options.sensors.some((s) => s.config.type !== 'button' && hasMediaConditions(s.config.media));
     this.engine.on('event', (event) => this.onEngineEvent(event));
-    options.stream.on('playing', (notification) => this.engine.handleNotification(notification));
+    options.stream.on('playing', (notification) => {
+      this.engine.handleNotification(notification);
+      this.settleIfIdle();
+    });
     options.stream.on('connected', () => {
       options.log.info('Connected to %s.', options.server.name);
       this.cancelResync();
@@ -157,6 +165,16 @@ export class Controller {
     // Read once without waiting for the notifications to connect: a rejected sign-in or an
     // unreachable server is reported at once, and the state is known sooner.
     void this.resync();
+  }
+
+  /**
+   * After a read found playback but before any of it was known, a playback that ends produces no
+   * event. With no player left, the state is known all the same: nothing plays.
+   */
+  private settleIfIdle(): void {
+    if (!this.ready && !this.stopped && this.hasRead && this.engine.snapshots().length === 0) {
+      this.becomeReady();
+    }
   }
 
   private becomeReady(fromTimer = false): void {
@@ -197,7 +215,13 @@ export class Controller {
    * when the notification stream connects or is reopened, and periodically while it is down.
    */
   async resync(): Promise<void> {
-    if (this.resyncing || this.stopped) {
+    if (this.stopped) {
+      return;
+    }
+    if (this.resyncing) {
+      // A read is under way, but it may have started before what this one is for (the stream
+      // connecting after changes it missed): read once more when it finishes.
+      this.resyncAgain = true;
       return;
     }
     this.resyncing = true;
@@ -205,6 +229,7 @@ export class Controller {
       // Only players known before the read can be judged by it; one that starts meanwhile is newer than the list.
       const known = new Set(this.engine.snapshots().map((snapshot) => snapshot.playerId));
       const playing = await this.options.plex.playing();
+      this.hasRead = true;
       const live = new Set(playing.map((entry) => entry.clientIdentifier));
       // Also players whose session is still being looked up: a play followed by a stop that was
       // missed (the connection was down) would otherwise end up as playback that never ends.
@@ -224,7 +249,10 @@ export class Controller {
       this.report(error, 'Cannot read playback from Plex');
     } finally {
       this.resyncing = false;
-      if (!this.options.stream.isConnected) {
+      if (this.resyncAgain) {
+        this.resyncAgain = false;
+        void this.resync();
+      } else if (!this.options.stream.isConnected) {
         this.scheduleResync();
       }
     }
@@ -267,6 +295,7 @@ export class Controller {
       ? ` from ${markPlayer(session.playerTitle ?? session.playerId)} (${webhook.user ? markPerson(webhook.user) : 'unknown person'}), ${markTitle(session.media.title)}`
       : webhook.media ? `: ${markTitle(webhook.media.title)}` : '');
     this.engine.handleWebhook(webhook);
+    this.settleIfIdle();
     if (WEBHOOK_ONLY.has(webhook.event)) {
       this.pressButtons(webhook.event as TriggerEvent, this.webhookContext(webhook), webhook.session);
     }
@@ -373,6 +402,8 @@ export class Controller {
       // A webhook carries Plex's local flag but no address; the address learned from the session list
       // settles it when Plex calls a home player remote (Plex in a Docker bridge network).
       home: isHome({ local: session?.local ?? known?.local, address: session?.address ?? known?.address }),
+      isVideoLibrary: this.options.isVideoLibrary,
+      extras: this.options.config.extras,
     });
   }
 

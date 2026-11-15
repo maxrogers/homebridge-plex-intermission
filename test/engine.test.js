@@ -135,20 +135,20 @@ test('a stop in the credits waits for the full hold', async () => {
   assert.deepEqual(types(events), ['play', 'credits.start', 'stop']);
 });
 
-test('a stop partway through counts after 1 second', async () => {
+test('a stop partway through counts after a quarter of a second', async () => {
   const { engine, clock, events } = createEngine();
   notify(engine, 'playing', 56_000);
   await settle();
   await clock.advance(20_000);
   notify(engine, 'stopped', 76_000);
-  await clock.advance(999);
+  await clock.advance(249);
   assert.deepEqual(types(events), ['play']);
   await clock.advance(1);
-  assert.deepEqual(events.at(-1), ['stop', 21_000, 76_000]);
+  assert.deepEqual(events.at(-1), ['stop', 20_250, 76_000]);
   assert.equal(engine.snapshot(PLAYER).activity, 'idle');
 });
 
-test('a paused item stopped partway through counts after 1 second', async () => {
+test('a paused item stopped partway through counts after a quarter of a second', async () => {
   const { engine, clock, events } = createEngine();
   notify(engine, 'playing', 56_000);
   await settle();
@@ -156,12 +156,12 @@ test('a paused item stopped partway through counts after 1 second', async () => 
   notify(engine, 'paused', 66_000);
   await clock.advance(60_000);
   notify(engine, 'stopped', 66_000);
-  await clock.advance(1_000);
+  await clock.advance(250);
   assert.deepEqual(types(events), ['play', 'pause', 'stop']);
 });
 
 test('without a known runtime a stop waits the full hold, except for Live TV', async () => {
-  for (const [media, expected] of [[{ ratingKey: '1', title: 'Trailer', type: 'clip' }, 10_000], [{ ratingKey: '1', title: 'News', type: 'episode', live: true }, 1_000]]) {
+  for (const [media, expected] of [[{ ratingKey: '1', title: 'Trailer', type: 'clip' }, 10_000], [{ ratingKey: '1', title: 'News', type: 'episode', live: true }, 250]]) {
     const { engine, clock, events } = createEngine({ sessions: { 7: session({ media }) } });
     notify(engine, 'playing', 20_000);
     await settle();
@@ -185,8 +185,8 @@ test('stopped and playing again within milliseconds (seen while seeking on iPhon
   assert.deepEqual(types(events), ['play']);
 });
 
-test('a stop hold shorter than 1 second applies everywhere, and 0 ends at once', async () => {
-  for (const [stopHoldMs, expected] of [[500, 500], [0, 0]]) {
+test('a stop hold shorter than a quarter of a second applies everywhere, and 0 ends at once', async () => {
+  for (const [stopHoldMs, expected] of [[100, 100], [0, 0]]) {
     const { engine, clock, events } = createEngine({ settings: { stopHoldMs } });
     notify(engine, 'playing', 56_000);
     await settle();
@@ -377,4 +377,71 @@ test('intro: starts and ends with the marker; skipping it ends it at once', asyn
   await clock.advance(1_000);
   assert.deepEqual(types(events), ['play', 'intro.start', 'seek', 'intro.end']);
   assert.equal(engine.snapshot(PLAYER).inIntro, false);
+});
+
+// The test session runs 2 hours (7,200,000 ms); its credits start at 7,000,000.
+const END_CREDITS = [credits(7_000_000)];
+
+test('a new item that starts in the credits goes straight to the credits after a moment, never through playing', async () => {
+  const { engine, clock, events } = createEngine({ markers: END_CREDITS });
+  notify(engine, 'playing', 7_050_000);
+  await settle();
+  assert.deepEqual(events, [], 'waits in case Plex moves it');
+  await clock.advance(2_400);
+  notify(engine, 'playing', 7_052_400);
+  await clock.advance(200);
+  assert.deepEqual(events, [['play', 2_500, 7_052_500], ['credits.start', 2_500, 7_052_500]]);
+  assert.equal(engine.snapshot(PLAYER).inCredits, true);
+});
+
+test('a new item reported first at the previous item\'s position starts where it really starts, without credits', async () => {
+  // Plex for Apple TV: the first report of a new movie carries the old one's end position.
+  const { engine, clock, events } = createEngine({ markers: END_CREDITS });
+  notify(engine, 'buffering', 9_300_000, { ratingKey: '2' });
+  await settle();
+  await clock.advance(700);
+  notify(engine, 'playing', 0, { ratingKey: '2' });
+  await clock.advance(5_000);
+  assert.deepEqual(events, [['play', 700, 0]], 'starts as soon as the real position is reported');
+  assert.equal(engine.snapshot(PLAYER).inCredits, false);
+});
+
+test('a new item paused while it waits to start counts as paused', async () => {
+  const { engine, clock, events } = createEngine({ markers: END_CREDITS, settings: { pauseDebounceMs: 1_000 } });
+  notify(engine, 'playing', 7_050_000);
+  await settle();
+  notify(engine, 'paused', 7_050_000);
+  await clock.advance(5_000);
+  assert.deepEqual(types(events), ['pause']);
+  notify(engine, 'playing', 7_050_000);
+  await settle();
+  assert.deepEqual(types(events), ['pause', 'resume', 'credits.start']);
+});
+
+test('a start late in an item waits at most a moment for slow markers', async () => {
+  let release;
+  const slow = new Promise((resolve) => { release = resolve; });
+  const { engine, clock, events } = createEngine({ markers: () => slow });
+  notify(engine, 'playing', 6_500_000);
+  await settle();
+  assert.deepEqual(events, []);
+  await clock.advance(1_500);
+  assert.deepEqual(types(events), ['play']);
+  release(END_CREDITS);
+  await settle();
+  await clock.advance(600_000);
+  assert.deepEqual(types(events), ['play', 'credits.start']);
+});
+
+test('any other start counts the moment Plex reports it, even while the markers are still being read', async () => {
+  const slow = new Promise(() => {});
+  const { engine, events } = createEngine({ markers: () => slow });
+  notify(engine, 'playing', 0);
+  await settle();
+  assert.deepEqual(events, [['play', 0, 0]], 'no wait at the start of an item');
+  notify(engine, 'stopped', 0);
+  const resumed = createEngine({ markers: () => slow });
+  notify(resumed.engine, 'playing', 3_600_000);
+  await settle();
+  assert.deepEqual(resumed.events, [['play', 0, 3_600_000]], 'nor when resuming halfway');
 });

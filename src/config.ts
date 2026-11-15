@@ -114,6 +114,8 @@ export interface IntermissionConfig {
   /** How often to re-read sessions while the notification stream is down and something plays. 0 disables. */
   safetyResyncMs: number;
   detailedLogging: boolean;
+  /** Whether trailers and extras (items in no library) count as playback. On unless `extras: false`. */
+  extras: boolean;
   /** Named commands; empty when the feature is off. */
   commands: NamedCommand[];
   /** Players chosen in setup, by ID, for recognising one that Plex gives a new ID. */
@@ -202,6 +204,7 @@ export function parseConfig(raw: unknown, log: Logger): IntermissionConfig {
     engine,
     safetyResyncMs,
     detailedLogging: config.detailedLogging === true,
+    extras: config.extras !== false,
     commands: parseCommands(config.commands),
     ...parseSelection(config.selection),
   };

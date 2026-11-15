@@ -90,7 +90,7 @@ export async function setupReport(service: SetupService, input: ReportInput): Pr
   const pairing = bridge?.username ? await service.bridgePairing(bridge.username).catch(() => undefined) : undefined;
   const paired = pairing ? (pairing.paired ? ', added to the Home app' : pairing.published ? ', not added to the Home app yet' : ', not started yet') : '';
   lines.push('', `Bridge: ${bridge?.username ? `own child bridge (port ${bridge.port ?? 'automatic'})${paired}` : 'main Homebridge bridge'}`);
-  lines.push(`Settings: ${JSON.stringify({ timing: input.config.timing ?? {}, webhook: input.config.webhook ?? {}, detailedLogging: input.config.detailedLogging ?? false })}`);
+  lines.push(`Settings: ${JSON.stringify({ timing: input.config.timing ?? {}, webhook: input.config.webhook ?? {}, detailedLogging: input.config.detailedLogging ?? false, extras: input.config.extras !== false })}`);
   return lines.join('\n');
 }
 
