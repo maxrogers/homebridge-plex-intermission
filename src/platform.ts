@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { CommandRunner } from './commands.js';
-import { parseConfig, type IntermissionConfig } from './config.js';
+import { parseConfig, type IntermissionConfig, type ServerConfig } from './config.js';
 import { Controller } from './controller.js';
 import { DiagnosticLog } from './diagnostics.js';
 import { guardedClock, systemClock, type Clock } from './engine/clock.js';
@@ -14,7 +14,7 @@ import { describe } from './errors.js';
 import { LibraryTypes } from './plex/library-types.js';
 import { MarkerCache } from './plex/marker-cache.js';
 import { NotificationStream } from './plex/notifications.js';
-import { PlexTv } from './plex/plex-tv.js';
+import { connectionCandidates, PlexTv } from './plex/plex-tv.js';
 import { PlexHttpError, PlexServer } from './plex/server.js';
 import { WebhookServer } from './plex/webhook-server.js';
 import { maskAddress } from './network.js';
@@ -23,18 +23,27 @@ import { SensorAccessory } from './sensors/sensor-accessory.js';
 import { CommandHooks, SensorHub } from './sensors/sensor-hub.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import { PlayerBook } from './players.js';
-import { serverToken, Storage } from './storage.js';
+import { serverToken, Storage, type Credentials } from './storage.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type WebhookFeed = EventEmitter<{ payload: [unknown] }>;
+
+/** What it takes to reach the Plex servers and find them again when they move. */
+interface PlexAccess {
+  credentials: Credentials;
+  clientIdentifier: string;
+  plexTv: PlexTv;
+}
 
 export class IntermissionPlatform implements DynamicPlatformPlugin {
   private readonly accessories = new Map<string, PlatformAccessory>();
   private readonly log: Logger;
   private readonly clock: Clock;
   private readonly settings: IntermissionConfig;
+  /** One per server, in the order of the settings; replaced when a server moves. */
   private readonly controllers: Controller[] = [];
+  private stopped = false;
   private readonly fingerprint: string;
   private readonly diagnostics: DiagnosticLog;
   private webhooks?: WebhookServer;
@@ -57,6 +66,7 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
       this.start().catch((error: unknown) => this.log.error('Could not start: %s', describe(error)));
     });
     this.api.on('shutdown', () => {
+      this.stopped = true;
       clearInterval(this.dailyTimer);
       void this.diagnostics.flush();
       for (const controller of this.controllers) {
@@ -98,7 +108,7 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
     }
 
     const state = await storage.state();
-    const plexTv = new PlexTv({ clientIdentifier: state.clientIdentifier });
+    const plexTv = this.createPlexTv(state.clientIdentifier);
     const plexPass = await this.checkPlexPass(plexTv, credentials.accountToken);
     if (plexPass === 'unauthorized') {
       return;
@@ -116,36 +126,61 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
       await this.startWebhooks(state.webhookSecret, feed);
     }
 
-    for (const server of servers) {
-      this.log.debug('Server %s at %s.', server.name, maskAddress(server.url));
-    }
     this.log.debug('Settings: %s.', describeSettings(this.settings));
-    const plexServers = servers.map((server) => new PlexServer({ baseUrl: server.url, token: serverToken(credentials, server.id), clientIdentifier: state.clientIdentifier }));
+    const access: PlexAccess = { credentials, clientIdentifier: state.clientIdentifier, plexTv };
+    // A server that moved since setup (a new IP address, say) is found again through plex.tv.
+    const urls = await Promise.all(servers.map(async (server) => {
+      const url = await this.locate(server, access);
+      this.log.debug('Server %s at %s.', server.name, maskAddress(url));
+      return url;
+    }));
+    if (this.stopped) {
+      return;
+    }
+    const connect = (server: ServerConfig, url: string) => new PlexServer({ baseUrl: url, token: serverToken(credentials, server.id), clientIdentifier: state.clientIdentifier });
+    const plexServers = servers.map((server, index) => connect(server, urls[index]!));
     const players = new PlayerBook(storage, (message) => this.log.debug(message));
     await players.load();
     const libraryTypes = new LibraryTypes(servers.map((server, index) => ({ serverId: server.id, libraries: () => plexServers[index]!.libraries() })));
     await libraryTypes.refresh();
 
-    servers.forEach((server, index) => {
+    const watch = (index: number): void => {
+      const server = servers[index]!;
       const plex = plexServers[index]!;
       const markers = new MarkerCache((ratingKey) => plex.markers(ratingKey), this.clock);
+      const stream = this.createStream(plex.notificationsUrl());
       const controller = new Controller({
         config: this.settings,
         server,
         log: servers.length > 1 ? prefixed(this.log, server.name) : this.log,
         clock: this.clock,
         plex,
-        stream: new NotificationStream({ url: plex.notificationsUrl(), log: this.log }),
+        stream,
         webhooks: feed,
         getMarkers: (ratingKey) => markers.get(ratingKey),
         hasCredits: (media) => libraryTypes.hasCredits(server.id, media),
         getFacts: (ratingKey) => plex.facts(ratingKey),
         sensors: hubs.map((hub) => hub.output(index)),
         players,
+        goneCheckMs: this.goneCheckMs,
       });
-      this.controllers.push(controller);
+      // Still unreachable after a while: look for the server at a new address and move to it.
+      stream.on('down', () => {
+        this.findServer(server, urls[index]!, access).then((url) => {
+          if (!url || this.stopped || this.controllers[index] !== controller) {
+            return;
+          }
+          this.log.warn('%s moved to %s. Open the plugin settings and press Refresh from Plex to save its new address.', server.name, maskAddress(url));
+          controller.stop();
+          urls[index] = url;
+          plexServers[index] = connect(server, url);
+          watch(index);
+        }).catch((error: unknown) => this.log.debug('Could not look for %s: %s', server.name, describe(error)));
+      });
+      this.controllers[index] = controller;
       controller.start();
-    });
+    };
+    servers.forEach((_, index) => watch(index));
     this.log.info('Watching %s with %d sensor%s.', servers.map((s) => s.name).join(' and '), hubs.length, hubs.length === 1 ? '' : 's');
 
     // Once a day: Plex Pass status and the library list.
@@ -155,6 +190,44 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
         .catch((error: unknown) => this.log.warn('Daily Plex Pass check failed: %s', describe(error)));
     }, DAY_MS);
     this.dailyTimer.unref();
+  }
+
+  /** Overridable in tests; see GONE_CHECK_MS in controller.ts. */
+  protected goneCheckMs?: number;
+
+  /** Overridable in tests. */
+  protected createPlexTv(clientIdentifier: string): PlexTv {
+    return new PlexTv({ clientIdentifier });
+  }
+
+  /** Overridable in tests. */
+  protected createStream(url: string): NotificationStream {
+    return new NotificationStream({ url, log: this.log });
+  }
+
+  /** The address to use for a server: the saved one while the server answers there, otherwise wherever plex.tv says it is now. */
+  private async locate(server: ServerConfig, access: PlexAccess): Promise<string> {
+    const saved = new PlexServer({ baseUrl: server.url, token: serverToken(access.credentials, server.id), clientIdentifier: access.clientIdentifier, timeoutMs: 4_000 });
+    const there = await saved.identity().then((identity) => !identity.machineIdentifier || identity.machineIdentifier === server.id, () => false);
+    if (there) {
+      return server.url;
+    }
+    const url = await this.findServer(server, server.url, access).catch(() => undefined);
+    if (url) {
+      this.log.warn('%s is not at its saved address; found it at %s. Open the plugin settings and press Refresh from Plex to save the new address.',
+        server.name, maskAddress(url));
+    }
+    return url ?? server.url;
+  }
+
+  /** An address other than `current` where the server answers, from the account's server list. */
+  private async findServer(server: ServerConfig, current: string, access: PlexAccess): Promise<string | undefined> {
+    const resource = (await access.plexTv.servers(access.credentials.accountToken)).find((candidate) => candidate.id === server.id);
+    if (!resource) {
+      return undefined;
+    }
+    const candidates = connectionCandidates(resource).filter((url) => url.replace(/\/+$/, '') !== current.replace(/\/+$/, ''));
+    return PlexServer.findWorkingUrl(candidates, { token: serverToken(access.credentials, server.id), clientIdentifier: access.clientIdentifier, machineIdentifier: server.id });
   }
 
   /** Notices Plex Pass ending or starting, adjusts webhooks, and leaves a notice for the settings page. */
@@ -174,7 +247,7 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
         await this.startWebhooks(secret, feed);
       }
     } else {
-      this.log.warn('Plex Pass ended. Intermission keeps working: play is noticed at the first progress report, new media gets no credits markers (95% of the runtime is used), and webhook-only events stop.');
+      this.log.warn('Plex Pass ended. Intermission keeps working: play is noticed at the first progress report, new media gets no credits markers, and webhook-only events stop.');
     }
   }
 
@@ -260,7 +333,7 @@ export class IntermissionPlatform implements DynamicPlatformPlugin {
   }
 }
 
-/** The settings that differ from the defaults, for the start-up log. */
+/** The settings that matter when reading a log, for the start-up line. */
 function describeSettings(settings: IntermissionConfig): string {
   const engine = settings.engine;
   const parts = [

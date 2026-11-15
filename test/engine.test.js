@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { creditsStart } from '../dist/engine/credits.js';
+import { creditsRanges } from '../dist/engine/credits.js';
 import { createEngine, credits, PLAYER, session, settle } from './helpers.js';
 
 const types = (events) => events.map(([type]) => type);
+/** Where the credits first begin, or null. */
+const creditsStart = (...args) => creditsRanges(...args)[0]?.startMs ?? null;
 
 function notify(engine, state, viewOffset, { ratingKey = '1', sessionKey = '7' } = {}) {
   engine.handleNotification({ clientIdentifier: PLAYER, sessionKey, ratingKey, state, viewOffset });

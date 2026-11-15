@@ -56,8 +56,3 @@ export function creditsRanges(
   }
   return [];
 }
-
-/** Position at which the credits first begin, or null. */
-export function creditsStart(...args: Parameters<typeof creditsRanges>): number | null {
-  return creditsRanges(...args)[0]?.startMs ?? null;
-}

@@ -11,6 +11,10 @@ export interface NotificationStreamOptions {
   maxBackoffMs?: number;
   /** How long a connection attempt may take before it is abandoned and retried. */
   connectTimeoutMs?: number;
+  /** How long the connection may stay silent before it is reopened; see `reopen`. */
+  silenceMs?: number;
+  /** How long the connection can be down before `down` is emitted, and how often after that. */
+  downMs?: number;
 }
 
 interface StreamEvents {
@@ -18,10 +22,21 @@ interface StreamEvents {
   notification: [type: string];
   connected: [];
   disconnected: [];
+  /** A silent connection was replaced by a new one. Notifications may have been missed. */
+  reopened: [];
+  /** The connection has been down for `downMs`. Emitted again every `downMs` while it stays down. */
+  down: [];
 }
 
 /** How long the connection can be down before it is worth a warning, not just debug lines. */
 const DOWN_WARNING_MS = 5 * 60_000;
+
+/**
+ * A server that loses power or its network never closes its connections, and this side only
+ * listens, so nothing would ever notice. A connection that has said nothing for this long is
+ * replaced by a new one; an idle server can be this quiet, so it is done without a log line.
+ */
+const SILENCE_MS = 5 * 60_000;
 
 /**
  * Plex Media Server push notifications over a websocket, reconnecting with backoff.
@@ -31,6 +46,8 @@ export class NotificationStream extends EventEmitter<StreamEvents> {
   private socket?: WebSocket;
   private retryTimer?: NodeJS.Timeout;
   private connectTimer?: NodeJS.Timeout;
+  private silenceTimer?: NodeJS.Timeout;
+  private lastDownEventAt = 0;
   private backoffMs: number;
   private stopped = true;
   private connected = false;
@@ -95,9 +112,16 @@ export class NotificationStream extends EventEmitter<StreamEvents> {
       }
       this.downSince = undefined;
       this.warnedDown = false;
-      this.setConnected(true);
+      this.lastDownEventAt = 0;
+      this.watchSilence();
+      if (this.connected) {
+        this.emit('reopened');
+      } else {
+        this.setConnected(true);
+      }
     };
     socket.onmessage = (event) => {
+      this.watchSilence();
       try {
         this.receive(event.data);
       } catch (error) {
@@ -128,18 +152,42 @@ export class NotificationStream extends EventEmitter<StreamEvents> {
     }
     this.options.log.debug('Plex notifications: %s (%s); trying again in %ss.', wasConnected ? 'connection closed' : 'cannot connect',
       reason, Math.round(this.backoffMs / 100) / 10);
-    if (!this.warnedDown && Date.now() - this.downSince >= DOWN_WARNING_MS) {
+    const downFor = Date.now() - this.downSince;
+    if (!this.warnedDown && downFor >= DOWN_WARNING_MS) {
       this.warnedDown = true;
       this.options.log.warn('Plex notifications still can\'t connect after %d minutes (%s). Pause, stop and credits timing wait for it; check that Homebridge can reach the Plex server.',
         DOWN_WARNING_MS / 60_000, reason);
     }
+    const downMs = this.options.downMs ?? DOWN_WARNING_MS;
+    if (downFor >= downMs && Date.now() - this.lastDownEventAt >= downMs) {
+      this.lastDownEventAt = Date.now();
+      this.emit('down');
+    }
     this.scheduleReconnect();
+  }
+
+  /** Restarts the wait for silence. */
+  private watchSilence(): void {
+    clearTimeout(this.silenceTimer);
+    this.silenceTimer = setTimeout(() => this.reopen(), this.options.silenceMs ?? SILENCE_MS);
+    this.silenceTimer.unref();
+  }
+
+  /** Replaces a connection that has gone quiet, staying "connected" unless the new one fails. */
+  private reopen(): void {
+    if (this.stopped || !this.connected) {
+      return;
+    }
+    this.discard();
+    this.connect();
   }
 
   /** Forgets the current socket, closing it without triggering its handlers. */
   private discard(): void {
     clearTimeout(this.connectTimer);
     this.connectTimer = undefined;
+    clearTimeout(this.silenceTimer);
+    this.silenceTimer = undefined;
     const socket = this.socket;
     this.socket = undefined;
     if (socket) {

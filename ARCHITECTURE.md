@@ -7,7 +7,8 @@ the timing choices.
 
 - Turn Plex playback into HomeKit sensors that Apple Home automations can use: lights down when a movie plays, up
   gently when the credits start (never before), a little when paused.
-- Event-driven. Plex pushes changes; the plugin reads from Plex only around those events. No polling.
+- Event-driven. Plex pushes changes; the plugin reads from Plex around those events and never polls for them. The
+  only timed read is a safety check of the session list every 2 minutes while something plays.
 - Set up in a few taps: sign in with Plex, pick devices, choose a preset.
 - Apple Home only. The plugin never controls lights; Home automations do.
 
@@ -113,13 +114,31 @@ session isn't listed yet, the read is retried twice, 1 s apart; a webhook for th
 supplies the session. Only then is a placeholder used (player ID, no title), and the next webhook for that item
 replaces it and sends `play` again so sensors re-check their filters.
 
+A player is forgotten when its playback ends, so players that come and go never pile up. A player already paused
+when it first appears (Homebridge restarted mid-pause) counts as paused once the pause has lasted the debounce.
+
+### When Plex goes quiet
+
+- **An app that vanishes.** A force-quit, a crash or a power cut never reports a stop, and Plex sends none; the
+  session just leaves `/status/sessions`. While anything plays, the list is read every 2 minutes, and a player
+  missing from two reads in a row is counted as stopped.
+- **A server that vanishes.** A server that loses power never closes its websocket, and this side only listens. A
+  connection silent for 5 minutes is replaced by a new one without a log line (an idle server is that quiet), followed
+  by a session read for anything missed.
+- **A server that moves.** The saved address is checked at start; if the server is not there, plex.tv's server list
+  gives its current addresses. The same happens while running once the stream has been down for 5 minutes. The log
+  asks for *Refresh from Plex* in the settings page, which saves the new address.
+- **A read that disagrees.** Every session read ends the players it no longer lists, including one whose session is
+  still being looked up, so a stop missed while disconnected can't leave playback that never ends.
+
 ### Reads from Plex
 
 | Moment | Reads |
 |---|---|
 | New item | One session read (skipped when a webhook supplied it), one marker read (cached) |
 | Item with media conditions | One metadata read (cached) |
-| Homebridge start, stream reconnect | One session read to restore state |
+| Homebridge start, stream connect or reopen | One session read to restore state |
+| While something plays | A session read every 2 minutes, to notice an app that vanished |
 | Stream down while something plays | A session read every 5 minutes (Safety re-sync) until it reconnects |
 | Daily | Plex Pass status and the library list |
 
@@ -318,8 +337,14 @@ values become "Title 1", "Player 1" and so on unless names are included.
   through a guard, and a webhook port in use is a clear log error, not a crash.
 - No environment variables; settings come from the config and the sign-in from storage.
 
-`test/runtime.test.js` starts the plugin with no configuration, with only the platform configured and with a full
-configuration before sign-in, and checks that it shuts down cleanly.
+`test/runtime.test.js` starts the plugin in a real Homebridge with no configuration, with only the platform
+configured and with a full configuration before sign-in, and checks that it shuts down cleanly.
+
+`test/scenarios.test.js` runs the whole platform on Homebridge's own API class against a fake Plex server and
+plex.tv (`test/world.js`), one test per setup people are likely to have: with and without Plex Pass, plex.tv or the
+server unreachable, a rejected sign-in, a server that restarts, moves or goes silent, several and shared servers,
+people, libraries and Live TV, devices and same-named devices, 1.0 configs, restarts mid-movie and mid-pause,
+autoplay, an app that is force-quit, media conditions, commands, changed sensors and damaged configs.
 
 ## Open questions
 

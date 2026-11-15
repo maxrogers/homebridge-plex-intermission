@@ -24,6 +24,8 @@ export interface StreamApi extends EventEmitter<{
   notification: [type: string];
   connected: [];
   disconnected: [];
+  reopened: [];
+  down: [];
 }> {
   readonly isConnected: boolean;
   start(): void;
@@ -65,12 +67,21 @@ export interface ControllerOptions {
   onUnauthorized?(): void;
   /** Remembers players as they play, and follows a chosen player that Plex gives a new ID. */
   players?: PlayerBook;
+  /** Overrides GONE_CHECK_MS, for tests. */
+  goneCheckMs?: number;
 }
 
 const WEBHOOK_ONLY = new Set<string>(WEBHOOK_EVENTS);
 
 /** How long sensors keep their state from before a restart when Plex cannot be read. */
 const STARTUP_GRACE_MS = 20_000;
+
+/**
+ * How often playback is checked against Plex's session list while something plays. An app that is
+ * force-quit, crashes or loses power never reports a stop, so Plex sends none; the session just
+ * leaves the list. A player missing from two checks in a row is counted as stopped.
+ */
+const GONE_CHECK_MS = 2 * 60_000;
 
 /** Media details kept per item; plenty for a night of TV. */
 const FACTS_CACHE_SIZE = 200;
@@ -89,6 +100,9 @@ export class Controller {
   private ready = false;
   private readyTimer?: TimerHandle;
   private resyncing = false;
+  private goneTimer?: TimerHandle;
+  /** Active players that were missing from Plex's session list at the last check. */
+  private readonly missing = new Set<string>();
   private unauthorized = false;
   private stopped = true;
   /** Media details by rating key: a value once read, or null while reading or when Plex had none. */
@@ -124,13 +138,15 @@ export class Controller {
       this.cancelResync();
       void this.resync();
     });
+    // A quiet connection was replaced: anything missed while it was dead shows up in a re-read.
+    options.stream.on('reopened', () => void this.resync());
     options.stream.on('disconnected', () => {
       if (!this.stopped) {
         options.log.warn('Lost the connection to %s. Reconnecting.', options.server.name);
         this.scheduleResync();
       }
     });
-    options.webhooks?.on('payload', (payload) => this.onWebhook(payload));
+    options.webhooks?.on('payload', this.onWebhook);
   }
 
   start(): void {
@@ -138,6 +154,9 @@ export class Controller {
     this.ready = false;
     this.readyTimer = this.options.clock.setTimeout(() => this.becomeReady(true), STARTUP_GRACE_MS);
     this.options.stream.start();
+    // Read once without waiting for the notifications to connect: a rejected sign-in or an
+    // unreachable server is reported at once, and the state is known sooner.
+    void this.resync();
   }
 
   private becomeReady(fromTimer = false): void {
@@ -163,13 +182,19 @@ export class Controller {
       this.readyTimer = undefined;
     }
     this.cancelResync();
+    if (this.goneTimer) {
+      this.options.clock.clearTimeout(this.goneTimer);
+      this.goneTimer = undefined;
+    }
+    this.options.webhooks?.off('payload', this.onWebhook);
     this.options.stream.stop();
+    this.options.stream.removeAllListeners();
     this.engine.dispose();
   }
 
   /**
-   * Reads current sessions and applies them, ending players Plex no longer lists. Runs when the
-   * notification stream connects (including at start), and periodically while it is down.
+   * Reads current sessions and applies them, ending players Plex no longer lists. Runs at start,
+   * when the notification stream connects or is reopened, and periodically while it is down.
    */
   async resync(): Promise<void> {
     if (this.resyncing || this.stopped) {
@@ -177,18 +202,15 @@ export class Controller {
     }
     this.resyncing = true;
     try {
+      // Only players known before the read can be judged by it; one that starts meanwhile is newer than the list.
+      const known = new Set(this.engine.snapshots().map((snapshot) => snapshot.playerId));
       const playing = await this.options.plex.playing();
       const live = new Set(playing.map((entry) => entry.clientIdentifier));
+      // Also players whose session is still being looked up: a play followed by a stop that was
+      // missed (the connection was down) would otherwise end up as playback that never ends.
       for (const snapshot of this.engine.snapshots()) {
-        const ratingKey = snapshot.session?.media.ratingKey;
-        if (snapshot.activity !== 'idle' && ratingKey && !live.has(snapshot.playerId)) {
-          this.engine.handleNotification({
-            clientIdentifier: snapshot.playerId,
-            ratingKey,
-            sessionKey: '',
-            state: 'stopped',
-            viewOffset: snapshot.positionMs,
-          });
+        if (known.has(snapshot.playerId) && !live.has(snapshot.playerId)) {
+          this.engine.gone(snapshot.playerId);
         }
       }
       for (const entry of playing) {
@@ -212,9 +234,11 @@ export class Controller {
     const { log } = this.options;
     log.debug('%s: %s on %s at %ds', event.type, markTitle(event.session.media.title),
       markPlayer(event.session.playerTitle ?? event.playerId), Math.round(event.positionMs / 1000));
+    this.watchGone();
     if (event.type === 'play') {
+      this.missing.delete(event.playerId);
       this.explainSensors(event.session);
-      void this.learnPlayer(event.session);
+      this.learnPlayer(event.session).catch((error: unknown) => this.options.log.error('Could not record the player: %s', describe(error)));
     }
     // States first: a button press is delivered to the hub at once and flushes queued state changes
     // with it, so a shortcut started by the press already sees the new states.
@@ -229,7 +253,7 @@ export class Controller {
     }
   }
 
-  private onWebhook(raw: unknown): void {
+  private readonly onWebhook = (raw: unknown): void => {
     const webhook = webhookFromPayload((raw ?? {}) as PlexWebhookPayload);
     if (!webhook) {
       return;
@@ -246,7 +270,7 @@ export class Controller {
     if (WEBHOOK_ONLY.has(webhook.event)) {
       this.pressButtons(webhook.event as TriggerEvent, this.webhookContext(webhook), webhook.session);
     }
-  }
+  };
 
   private webhookContext(webhook: WebhookEvent): MatchContext {
     const context = this.context(webhook.session, webhook.media);
@@ -346,7 +370,9 @@ export class Controller {
     return contextOf(session, media, this.options.server.id, {
       followedAs: id && !this.options.config.ignoredPlayers.includes(id) ? book?.followedAs(id) : undefined,
       playerName: session?.playerTitle ?? known?.name,
-      home: isHome(session) ?? isHome(known),
+      // A webhook carries Plex's local flag but no address; the address learned from the session list
+      // settles it when Plex calls a home player remote (Plex in a Docker bridge network).
+      home: isHome({ local: session?.local ?? known?.local, address: session?.address ?? known?.address }),
     });
   }
 
@@ -369,6 +395,9 @@ export class Controller {
       address: session.address ?? listed?.address,
       local: session.local ?? listed?.local,
     };
+    if (this.stopped) {
+      return;
+    }
     const id = player.playerId;
     const { followed, newlyShared } = book.record(player, this.chosenPlayers, { ignored: config.ignoredPlayers, pinned: this.pinnedApps });
     const label = `${markPlayer(player.playerTitle ?? id)} (${[player.product, id.slice(0, 8)].filter(Boolean).join(', ')})`;
@@ -404,6 +433,41 @@ export class Controller {
   private onAnyDevice(session: SessionInfo): boolean {
     const context = this.context(session);
     return this.options.sensors.some((s) => (s.config.filters.devices ?? []).some((device) => onDevice(device, context)));
+  }
+
+  /** Starts the check for players that went away without a stop (see GONE_CHECK_MS) while something plays. */
+  private watchGone(): void {
+    if (this.goneTimer || this.stopped || !this.engine.snapshots().some((snapshot) => snapshot.activity !== 'idle')) {
+      return;
+    }
+    this.goneTimer = this.options.clock.setTimeout(() => {
+      this.goneTimer = undefined;
+      void this.checkGone();
+    }, this.options.goneCheckMs ?? GONE_CHECK_MS);
+  }
+
+  private async checkGone(): Promise<void> {
+    // While disconnected, the safety re-sync does this job.
+    const playing = this.options.stream.isConnected ? await this.call(() => this.options.plex.playing(), undefined) : undefined;
+    if (this.stopped) {
+      return;
+    }
+    if (playing) {
+      const live = new Set(playing.map((entry) => entry.clientIdentifier));
+      for (const snapshot of this.engine.snapshots()) {
+        const id = snapshot.playerId;
+        if (snapshot.activity === 'idle' || live.has(id)) {
+          this.missing.delete(id);
+        } else if (this.missing.delete(id)) {
+          this.options.log.debug('%s is no longer in Plex\'s session list and never reported a stop (app closed or connection lost); counting it as stopped.',
+            markPlayer(snapshot.session?.playerTitle ?? id));
+          this.engine.gone(id);
+        } else {
+          this.missing.add(id);
+        }
+      }
+    }
+    this.watchGone();
   }
 
   private scheduleResync(): void {

@@ -243,12 +243,20 @@ function parseServers(value: unknown): ServerConfig[] {
     const server = asRecord(entry);
     const id = asString(server.id);
     const url = asString(server.url);
-    if (!id || !url || seen.has(id)) {
+    if (!id || !url || seen.has(id) || !isHttpUrl(url)) {
       return [];
     }
     seen.add(id);
     return [{ id, name: asString(server.name) ?? 'Plex', url }];
   });
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    return ['http:', 'https:'].includes(new URL(value).protocol);
+  } catch {
+    return false;
+  }
 }
 
 function parseMedia(value: unknown): MediaConditions {

@@ -224,8 +224,8 @@ export class SetupService {
   }
 
   /**
-   * Full reset: removes Intermission's webhook from the Plex account when possible, then the sign-in
-   * and Plex Pass history. The settings page clears the plugin's config.
+   * Full reset: removes Intermission's webhook from the Plex account when possible, then the sign-in,
+   * the Plex Pass history and what was learned about players. The settings page clears the plugin's config.
    */
   async resetPlugin(options: WebhookOptions): Promise<{ webhookRemoved: boolean }> {
     let webhookRemoved = false;

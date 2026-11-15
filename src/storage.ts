@@ -133,10 +133,11 @@ export class Storage {
     return this.writeJson(FILES.players, value);
   }
 
-  /** Removes the sign-in and Plex Pass history. Keeps the client ID and webhook key. */
+  /** Removes the sign-in, the Plex Pass history and what was learned about players. Keeps the client ID and webhook key. */
   async reset(): Promise<void> {
     await rm(this.path(FILES.credentials), { force: true });
     await rm(this.path(FILES.plexPass), { force: true });
+    await rm(this.path(FILES.players), { force: true });
   }
 
   private path(name: string): string {

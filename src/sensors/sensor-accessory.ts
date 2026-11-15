@@ -23,7 +23,8 @@ export class SensorAccessory {
     accessory.getService(Service.AccessoryInformation)!
       .setCharacteristic(Characteristic.Manufacturer, 'Intermission')
       .setCharacteristic(Characteristic.Model, MODELS[config.type])
-      .setCharacteristic(Characteristic.SerialNumber, config.id);
+      // HomeKit rejects serial numbers shorter than two characters.
+      .setCharacteristic(Characteristic.SerialNumber, config.id.length > 1 ? config.id : `sensor-${config.id}`);
 
     const type = this.serviceType();
     // A sensor whose type changed keeps its accessory (and Home automations) but swaps the service.

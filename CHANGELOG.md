@@ -5,7 +5,38 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-## [1.1.0] - 2026-11-06
+## [1.1.1] - 2026-11-14
+
+### Fixed
+
+- An app that is force-quit, crashes or loses power never reports a stop, which left its sensors on. Playback is now
+  checked against Plex's session list every 2 minutes and ends when the player is gone.
+- A Plex server that lost power or its network left a dead connection that was never noticed. A connection silent for
+  5 minutes is replaced, and anything missed is read.
+- A Plex server whose address changed is found again through plex.tv, at start and while running. *Refresh from Plex*
+  in the settings page saves the new address.
+- Homebridge restarting during a pause no longer shows the pause as playing or as nothing playing.
+- With Plex Pass and Plex in a Docker bridge network, a device at home that Plex calls remote now counts as soon as
+  its address is known.
+- A play whose stop was missed while the connection was down could count as playing indefinitely.
+- Setup no longer ends on a page with nothing to press when Plex can't be read; it offers *Try again*.
+- Webhooks with large posters (up to 16 MB) are accepted.
+- A rejected sign-in or an unreachable server is reported at start, without waiting for the notification connection.
+- *Reset Intermission* also clears what was learned about players. Server addresses that aren't http or https are
+  skipped. Sensors with a one-character ID get a valid serial number.
+
+### Added
+
+- Two devices with the same name can each be a device: after *This one*, setup offers the other as a device of its
+  own, for the sensors in its room.
+- A chosen device that hasn't been seen lately is still listed in setup, so it can be unchosen.
+
+### Changed
+
+- Players are forgotten when their playback ends, and the marker cache is capped, so memory stays flat over months.
+- Tests: 34 whole-plugin scenarios on Homebridge's API class against a fake Plex server and plex.tv.
+
+## [1.1.0] - 2026-11-07
 
 ### Added
 
@@ -23,22 +54,16 @@ All notable changes to this project are documented here. The format follows
 - A player is at home when Plex marks it local or its address is private, so Plex in a Docker bridge network without
   LAN Networks set still works.
 - Addresses shared by players on different platforms are never used to tell devices apart or follow new IDs.
-
-## [1.0.2] - 2026-11-06
+- The Sensors tab offers to add a player with a new ID to the sensors that watch the player it replaces, or to leave it
+  off.
+- Apps Plex lists without a name show the app Intermission saw them play as.
+- Diagnostics lists the players seen playing, with their app, last play and whether they are chosen or followed.
 
 ### Fixed
 
 - A player that Plex gives a new ID, after its app is reinstalled or signed in again, keeps changing the lights. When
   its name, app and LAN address match a chosen player, the sensors follow it as that player and the log says so.
 - A player that only shares a chosen player's name gets a warning in the log instead of being silently ignored.
-
-### Changed
-
-- The Sensors tab offers to add a player with a new ID to the sensors that watch the player it replaces, or to leave it
-  off.
-- Setup: players that share a name show when each last played and the start of its ID, and apps Plex lists without a
-  name show the app Intermission saw them play as.
-- Diagnostics lists the players seen playing, with their app, last play and whether they are chosen or followed.
 
 ## [1.0.1] - 2026-10-23
 
@@ -107,8 +132,8 @@ First public release.
   Home app.
 - Lost connections to Plex are retried with their reasons logged, with a warning if Plex stays unreachable.
 
-[Unreleased]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.1.0...HEAD
-[1.1.0]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.0.2...v1.1.0
-[1.0.2]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.0.1...v1.0.2
+[Unreleased]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/maxrogers/homebridge-plex-intermission/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/maxrogers/homebridge-plex-intermission/releases/tag/v1.0.0

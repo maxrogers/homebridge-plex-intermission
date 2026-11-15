@@ -43,7 +43,7 @@ To try a build in Homebridge, run `npm pack`, then install the `.tgz` from the H
 | `src/config.ts`, `src/storage.ts` | Config parsing with ranges; the sign-in and plugin state on disk |
 | `src/setup-service.ts`, `src/report.ts` | What the settings page asks of Plex, and the diagnostics file |
 | `homebridge-ui/` | The settings page: `server.js` answers its requests; `public/app.js` is the page, `public/guide.js` the Guide tab, `public/model.js` the testable helpers |
-| `test/` | Unit tests and replays of recorded playback (`test/fixtures/`) |
+| `test/` | Unit tests, replays of recorded playback (`test/fixtures/`), and whole-plugin scenarios against a fake Plex (`scenarios.test.js`, `world.js`) |
 | `assets/` | Icon sources; `icon.png` is made from `icon.svg` |
 
 [ARCHITECTURE.md](ARCHITECTURE.md) explains the design and the measurements behind it.

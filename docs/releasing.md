@@ -29,7 +29,7 @@ Once the package is on npm, open a **Plugin Verification Request** at
 [homebridge/plugins](https://github.com/homebridge/plugins/issues/new/choose) and attach `assets/icon-100.png` as the
 icon. The requirements are on the [Verified Plugins](https://github.com/homebridge/plugins/wiki/Verified-Plugins) page.
 
-Every requirement is met: dynamic platform, settings GUI (custom UI), runs on Node 22 and 24, doesn't start until
+Every requirement is met: dynamic platform, settings GUI (custom UI), runs on Node 22, 24 and 26, doesn't start until
 configured, no post-install scripts, no analytics, files only in the Homebridge storage folder, and errors are caught
 and logged. For **More Information**, since homebridge-plex-metadata is already verified:
 
@@ -37,7 +37,7 @@ and logged. For **More Information**, since homebridge-plex-metadata is already 
 > homebridge-plex-credits in its README. Beyond a playing sensor, it triggers at Plex's credits markers (re-timed on
 > every skip, with mid-credits scenes), and offers pause, credits, intro and nothing-playing states with presets where
 > exactly one sensor is on at a time. It follows playback through the server's push notifications as well as
-> webhooks, so it works without Plex Pass and never polls. Setup is a Plex sign-in in the settings page that lists
-> servers, players, people and libraries, with no tokens or IDs to copy. It also offers per-sensor filters, media
+> webhooks, so it works without Plex Pass and doesn't poll for changes. Setup is a Plex sign-in in the settings page
+> that lists servers, devices, people and libraries, with no tokens or IDs to copy. It also offers per-sensor filters, media
 > conditions (wide, 4K, HDR, rating, labels), several servers, its own child bridge, a Guide for the Home automations,
 > and a diagnostics file with private details removed.

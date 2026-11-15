@@ -60,12 +60,15 @@ export function hidePublicAddresses(text: string): string {
     .replace(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g, (ip) => (PRIVATE.test(ip) || ip.split('.').some((p) => Number(p) > 255) ? ip : 'x.x.x.x'));
 }
 
-/** A server URL for a report: private addresses as they are, public ones hidden. */
+/**
+ * A server URL for a report: private addresses as they are, public ones hidden. A plex.direct name
+ * is shown as its address and marked, since such names fail where the router blocks DNS rebinding.
+ */
 export function maskAddress(url: string): string {
   const address = serverAddress(url);
   if (address && PRIVATE.test(address)) {
     const parsed = new URL(url);
-    return `${parsed.protocol}//${address}:${parsed.port || '32400'}`;
+    return `${parsed.protocol}//${address}:${parsed.port || '32400'}${parsed.hostname.endsWith('.plex.direct') ? ' (plex.direct name)' : ''}`;
   }
   return 'remote address';
 }

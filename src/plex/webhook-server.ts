@@ -95,7 +95,8 @@ export class WebhookServer extends EventEmitter<{ payload: [unknown] }> {
       }
       return;
     }
-    const limit = this.options.maxBodyBytes ?? 1_000_000;
+    // Plex attaches the item's poster to some events, so bodies can run to a few megabytes.
+    const limit = this.options.maxBodyBytes ?? 16_000_000;
     const chunks: Buffer[] = [];
     let size = 0;
     request.on('data', (chunk: Buffer) => {

@@ -99,6 +99,7 @@ const SESSION_RETRIES = 2;
  */
 export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
   private readonly players = new Map<string, PlayerRecord>();
+  private disposed = false;
 
   constructor(
     private readonly deps: EngineDependencies,
@@ -108,14 +109,18 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
   }
 
   handleNotification(notification: PlayingNotification): void {
-    const player = this.player(notification.clientIdentifier);
+    if (this.disposed) {
+      return;
+    }
     if (notification.state === 'stopped') {
       // A late stop for the previous item must not end the one that replaced it.
-      if (player.ratingKey === notification.ratingKey) {
-        this.stop(player);
+      const playing = this.players.get(notification.clientIdentifier);
+      if (playing && playing.ratingKey === notification.ratingKey) {
+        this.stop(playing);
       }
       return;
     }
+    const player = this.player(notification.clientIdentifier);
     if (notification.state !== player.raw || notification.ratingKey !== player.ratingKey) {
       this.deps.log.debug('%s: Plex reports %s at %s (item %s)', label(player), notification.state, formatTime(notification.viewOffset), notification.ratingKey);
     }
@@ -134,7 +139,10 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
 
   handleWebhook(webhook: WebhookEvent): void {
     const session = webhook.session;
-    if (!session) {
+    if (!session || this.disposed) {
+      return;
+    }
+    if (webhook.event !== 'media.play' && webhook.event !== 'media.resume' && !this.players.has(session.playerId)) {
       return;
     }
     const player = this.player(session.playerId);
@@ -188,10 +196,23 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
     return [...this.players.keys()].map((id) => this.snapshot(id));
   }
 
-  /** Clears all timers. Call on shutdown. */
+  /**
+   * Ends whatever a player is doing, for a player Plex no longer lists. Unlike a `stopped`
+   * notification it needs no item, so it also ends a player whose session is still being looked up.
+   */
+  gone(playerId: string): void {
+    const player = this.players.get(playerId);
+    if (player && !this.disposed) {
+      this.stop(player);
+    }
+  }
+
+  /** Clears all timers and ignores everything from now on, including lookups still in flight. Call on shutdown. */
   dispose(): void {
+    this.disposed = true;
     for (const player of this.players.values()) {
       this.clearTimers(player);
+      player.generation += 1;
     }
     this.players.clear();
     this.removeAllListeners();
@@ -325,7 +346,19 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
       player.activity = 'playing';
       this.emitEvent(player, 'play');
     } else if (player.raw === 'paused') {
-      player.activity = 'paused';
+      // Already paused when it became known (Homebridge restarted, or the app opened on a paused
+      // item). It counts as a pause once it has lasted the debounce, like any other.
+      const enter = () => {
+        player.pauseTimer = undefined;
+        if (generation === player.generation && player.raw === 'paused' && player.activity === 'idle') {
+          this.enterPaused(player);
+        }
+      };
+      if (this.settings.pauseDebounceMs <= 0) {
+        enter();
+      } else {
+        player.pauseTimer = this.deps.clock.setTimeout(enter, this.settings.pauseDebounceMs);
+      }
     }
 
     const credited = Promise.resolve(this.deps.hasCredits?.(session.media) ?? CREDITED_TYPES.has(session.media.type))
@@ -483,7 +516,8 @@ export class PlaybackEngine extends EventEmitter<{ event: [EngineEvent] }> {
       this.emitEvent(player, 'stop');
     }
     this.resetSession(player);
-    player.activity = 'idle';
+    // Forgotten until it plays again, so players that come and go don't pile up.
+    this.players.delete(player.id);
   }
 
   /**

@@ -205,10 +205,15 @@ export function mergeDevices(devices = [], extra = []) {
   return [...devices.map((d) => extra.find((e) => e.id === d.id) ?? d), ...extra.filter((e) => !devices.some((d) => d.id === e.id))];
 }
 
-/** Devices any sensor or the setup choices use; the rest are dropped. */
+/**
+ * Devices any sensor or the setup choices use; the rest are dropped. The other half of two
+ * same-named devices is kept while its twin is used, so a sensor can still choose it.
+ */
 export function usedDevices(config) {
   const used = new Set([...(config.selection?.devices ?? []).map((d) => d.id), ...(config.sensors ?? []).flatMap((s) => s.filters?.devices ?? [])]);
-  return (config.devices ?? []).filter((d) => used.has(d.id));
+  const devices = config.devices ?? [];
+  const twinUsed = (d) => d.apps?.length > 0 && devices.some((o) => o.id !== d.id && used.has(o.id) && o.apps?.length > 0 && nameKey(o.match) === nameKey(d.match));
+  return devices.filter((d) => used.has(d.id) || twinUsed(d));
 }
 
 /** Whether a known app is on a device: one of its pinned apps, or any app reporting its name. */
@@ -525,7 +530,7 @@ export function missingSetupPlayers(sensors, selection, known = []) {
 
 const sameText = (a, b) => typeof a === 'string' && typeof b === 'string' && a.trim().toLowerCase() === b.trim().toLowerCase();
 
-/** Players Intermission saw play in the last 30 days that may be a chosen player with a new Plex ID. */
+/** How recently a player must have played to be pointed out as a possible new ID. */
 const RECENT_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**

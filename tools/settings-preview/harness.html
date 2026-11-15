@@ -67,6 +67,11 @@ if (qs.get('seen') === 'shared') {
   discovery.players[0].address = '10.0.0.20';
 }
 window.__liveCount = () => liveCount;
+// Unusual accounts and outages, for the flows.
+if (qs.get('noplayers')) discovery.players = [];
+if (qs.get('nousers')) discovery.users = [];
+if (qs.get('down')) discovery.servers[0] = { ...discovery.servers[0], libraries: [], error: 'Plex did not answer (timeout)' };
+let failures = Number(qs.get('fail') ?? 0);
 if (qs.get('hook') === 'ok') Object.assign(hook, { registered: true, stale: [], disabledOn: [], serverSettings: [{ name: 'Unraid', enabled: true }] });
 const report = 'Intermission 0.1.0\nHomebridge UI 5.9.0, Docker, Node.js v24.3.0\n\nPlex account: Steve\nPlex Pass: yes\n\nServer: Unraid (http://10.0.0.2:32400)\n  Version: 1.41.6\n  Credits detection: as a scheduled task and when media is added\n  Webhooks setting: on\n  Library 1: Movies (movie, tv.plex.agents.movie)\n\nSensors: 4';
 const preset = qs.get('existing');
@@ -89,13 +94,13 @@ window.homebridge = {
     switch (path) {
       case '/status': return !signedIn ? { signedIn: false }
         : scenario === 'ended' ? { signedIn: true, username: 'Steve', plexPass: false, plexPassChange: { active: false, changedAt: '2026-10-30T15:00:00Z' } }
-        : { signedIn: true, username: 'Steve', plexPass: !['choose', 'nopass-adv'].includes(scenario) };
+        : { signedIn: true, username: 'Steve', plexPass: !['choose', 'nopass-adv'].includes(scenario) && !qs.get('nopass') };
       case '/signin/start': return body.mode === 'code' ? { code: 'K7QX', linkUrl: 'https://plex.tv/link' } : { authUrl: 'https://app.plex.tv/auth#?x' };
       case '/signin/check': return { done: false };
       case '/servers': return allServers.filter((s) => serverList.includes(s.id));
       case '/servers/select': return { servers: body.ids.map((id) => ({ id, name: allServers.find((s) => s.id === id).name, url: `http://${id}` })), failed: [] };
-      case '/discover': return { ...discovery, servers: [...discovery.servers, { id: 'mom', name: "Mom's Plex", libraries: [{ id: '1', key: 'mom/1', title: 'Mom Movies', type: 'movie', kind: 'movie' }] }].filter((s) => body.servers.some((b) => b.id === s.id)) };
-      case '/webhook/status': return ['ended', 'nopass-adv'].includes(scenario) ? { ...hook, plexPass: false } : hook;
+      case '/discover': if (failures-- > 0) { throw new Error('Could not reach plex.tv. Check the internet connection of the Homebridge machine.'); } return { ...discovery, servers: [...discovery.servers, { id: 'mom', name: "Mom's Plex", libraries: [{ id: '1', key: 'mom/1', title: 'Mom Movies', type: 'movie', kind: 'movie' }] }].filter((s) => body.servers.some((b) => b.id === s.id)) };
+      case '/webhook/status': return ['ended', 'nopass-adv'].includes(scenario) || qs.get('nopass') ? { ...hook, plexPass: false } : hook;
       case '/signout': return { signedIn: false };
       case '/reset': return { webhookRemoved: true };
       case '/webhook/remove': return { ...hook, registered: false, stale: [] };

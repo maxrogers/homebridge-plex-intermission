@@ -63,7 +63,7 @@ export class PlayerBook {
   ) {}
 
   async load(now = new Date()): Promise<void> {
-    this.records = parseRecords(await this.storage.readPlayers().catch(() => undefined));
+    this.records = parseRecords(await this.storage.readPlayers().catch(() => undefined), now);
     const cutoff = now.getTime() - FORGET_AFTER_MS;
     for (const [id, player] of Object.entries(this.records.seen)) {
       if (Date.parse(player.lastPlayedAt) < cutoff) {
@@ -173,7 +173,7 @@ const emptyRecords = (): PlayerRecords => ({ seen: {}, followed: {}, sightings: 
 
 const object = (value: unknown): Record<string, unknown> => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {});
 
-export function parseRecords(value: unknown): PlayerRecords {
+export function parseRecords(value: unknown, now = new Date()): PlayerRecords {
   const raw = object(value);
   const records = emptyRecords();
   for (const [id, entry] of Object.entries(object(raw.seen))) {
@@ -201,7 +201,8 @@ export function parseRecords(value: unknown): PlayerRecords {
     }
   }
   for (const [name, at] of Object.entries(object(raw.sharedNames))) {
-    if (typeof at === 'string') {
+    // A name stops counting as shared once the two devices haven't alternated for a while (one was sold, say).
+    if (typeof at === 'string' && now.getTime() - Date.parse(at) <= SIGHTINGS_MS) {
       records.sharedNames[name] = at;
     }
   }

@@ -764,6 +764,22 @@ await flow('Two devices with one name: This one narrows the device to the apps a
   assert.deepEqual(theater.apps, ['ATV', '1AF4CEC1-CE71'], 'the apps at the playing app\'s address, not the bedroom one');
   assert.ok(c.sensors.every((s) => s.filters.devices.join() === theater.id));
   assert.match(await page.textContent('.im-sensor .im-summary'), /on Theater/);
+
+  // The other Apple TV becomes a device of its own, for the sensors in its room.
+  await toChoose(page);
+  await click(page, '[data-action=other-device]');
+  const label = await page.$('[data-device-label][value="Living Room 2"]');
+  await label.fill('Bedroom');
+  await label.dispatchEvent('change');
+  await page.waitForTimeout(200);
+  await click(page, '[data-action=to-template]');
+  const after = await config(page);
+  const bedroom = after.devices.find((d) => d.name === 'Bedroom');
+  assert.deepEqual(bedroom.apps, ['BEDROOMATV']);
+  assert.ok(after.sensors.every((s) => !s.filters.devices.includes(bedroom.id)), 'not added to the existing sensors');
+  await click(page, '[data-action=edit]');
+  await click(page, `[data-action=toggle-filter-device][data-id="dev:${bedroom.id}"]`);
+  assert.ok((await config(page)).sensors[0].filters.devices.includes(bedroom.id), 'a sensor can choose it');
 });
 
 await flow('New Plex ID on a device narrowed to its apps: offered, then added to the device', async () => {
@@ -784,6 +800,54 @@ await flow('New Plex ID on a device narrowed to its apps: offered, then added to
   await click(followed, '[data-action=dismiss-new-player]');
   assert.equal(await followed.$('#im-new-players'), null);
   assert.deepEqual((await config(followed)).selection.dismissedPlayers, ['lcn8wszvp5by']);
+});
+
+await flow('First setup on a server nobody has played from yet: All players is chosen, and setup finishes', async () => {
+  const { page, errors } = await open({ s: 'server', servers: 'srv', noplayers: '1', nousers: '1' });
+  await click(page, '[data-action=webhooks-next]');
+  await page.waitForTimeout(300);
+  assert.equal(await page.getAttribute('[data-action=players-all]', 'aria-pressed'), 'true');
+  assert.match(await page.textContent('#intermission'), /No Plex Home users found/);
+  await click(page, '[data-action=to-template]');
+  await click(page, '[data-action=finish]');
+  const c = await config(page);
+  assert.deepEqual(c.sensors[0].filters, { players: [], devices: [], exceptPlayers: [], users: [], libraries: ['srv/1', 'srv/2'] });
+  assert.deepEqual(c.devices, []);
+  assert.deepEqual(errors, []);
+});
+
+await flow('First setup without Plex Pass: no webhook to add, setup finishes, Plex Pass buttons are marked', async () => {
+  const { page, errors } = await open({ s: 'server', servers: 'srv', nopass: '1' });
+  assert.match(await page.textContent('#intermission'), /Plex Pass/);
+  assert.equal(await page.$('[data-webhook-add]'), null, 'nothing to add without Plex Pass');
+  await click(page, '[data-action=webhooks-next]');
+  await page.waitForTimeout(300);
+  await click(page, '[data-action=to-template]');
+  await click(page, '[data-action=finish]');
+  assert.equal((await config(page)).sensors.length, 1);
+  await click(page, '[data-action=add][data-type=button]');
+  await click(page, '[data-action=toggle-event][data-id=play]');
+  assert.equal(await page.getAttribute('[data-action=toggle-event][data-id="library.new"]', 'disabled'), '', 'webhook-only events can\'t be chosen');
+  assert.deepEqual(errors, []);
+});
+
+await flow('Plex unreachable during setup: the error is shown with a way to try again; a server that is down says so', async () => {
+  const { page } = await open({ s: 'server', servers: 'srv', fail: '1' });
+  await click(page, '[data-action=webhooks-next]');
+  await page.waitForTimeout(300);
+  assert.match(await page.textContent('#intermission'), /Could not reach plex\.tv/);
+  await click(page, '[data-action=refresh-choose]');
+  await page.waitForTimeout(300);
+  assert.ok(await page.$('[data-action=toggle-device]'), 'works on the second try');
+
+  const { page: down, errors } = await open({ s: 'server', servers: 'srv', down: '1' });
+  await click(down, '[data-action=webhooks-next]');
+  await down.waitForTimeout(300);
+  assert.match(await down.textContent('#intermission'), /Could not read libraries: Plex did not answer/);
+  assert.equal(await down.getAttribute('[data-action=to-template]', 'disabled'), '', 'no libraries, so Next waits');
+  await click(down, '[data-action=libraries-all]');
+  assert.equal(await down.getAttribute('[data-action=to-template]', 'disabled'), null, 'All libraries is still possible');
+  assert.deepEqual(errors, []);
 });
 
 await flow('Webhooks: remove an old address, add Intermission\'s, remove it again', async () => {

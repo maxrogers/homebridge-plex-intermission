@@ -6,6 +6,9 @@ interface Entry {
   fetchedAt: number;
 }
 
+/** Items kept; the oldest is dropped beyond this. */
+const MAX_ENTRIES = 500;
+
 /**
  * Caches credits and intro markers per item. Items without markers are checked again after
  * `emptyTtlMs`, because Plex may generate them later.
@@ -29,7 +32,11 @@ export class MarkerCache {
     if (!request) {
       request = this.fetchMarkers(ratingKey)
         .then((markers) => {
+          this.entries.delete(ratingKey);
           this.entries.set(ratingKey, { markers, fetchedAt: this.clock.now() });
+          if (this.entries.size > MAX_ENTRIES) {
+            this.entries.delete(this.entries.keys().next().value!);
+          }
           return markers;
         })
         .finally(() => this.pending.delete(ratingKey));

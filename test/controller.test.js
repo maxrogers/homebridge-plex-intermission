@@ -144,16 +144,16 @@ test('re-syncs periodically only while disconnected and something plays', async 
   await controller.start();
   stream.connect();
   await settle();
-  assert.equal(reads, 1);
+  assert.equal(reads, 2, 'one read at start, one when the notifications connect');
   stream.disconnect();
   await clock.advance(60_000);
-  assert.equal(reads, 2);
-  await clock.advance(60_000);
   assert.equal(reads, 3);
+  await clock.advance(60_000);
+  assert.equal(reads, 4);
   stream.connect();
   await settle();
   await clock.advance(5 * 60_000);
-  assert.equal(reads, 4, 'only the reconnect read; no timer while connected');
+  assert.equal(reads, 7, 'the reconnect read, then only the two-minute check for players that went away');
   await controller.stop();
 });
 
@@ -434,4 +434,56 @@ test('addresses shared by players on different platforms are not trusted', async
   assert.equal(book.trusted('172.17.0.1'), false);
   const { followed } = book.record({ playerId: 'TV2', playerTitle: 'Apple TV', platform: 'tvOS', product: 'X', address: '172.17.0.1', media }, new Set(['TV']), { pinned: new Set(['TV']) });
   assert.deepEqual(followed, [], 'nothing is followed by an untrusted address');
+});
+
+test('a player that leaves Plex\'s session list without a stop is counted as stopped after two checks', async () => {
+  let listed = [notify('playing', 10_000)];
+  let reads = 0;
+  const { clock, stream, controller, sensors } = setup({ playing: () => (reads++, listed), markers: [] });
+  await controller.start();
+  stream.connect();
+  await settle();
+  stream.emit('playing', notify('playing', 10_000));
+  await settle();
+  assert.equal(sensors.playing.active, true);
+  await clock.advance(10 * 60_000);
+  assert.equal(sensors.playing.active, true, 'still listed: nothing changes');
+  const before = reads;
+  listed = [];
+  await clock.advance(2 * 60_000);
+  assert.equal(sensors.playing.active, true, 'missing once could be a blip');
+  await clock.advance(2 * 60_000 + 15_000);
+  assert.equal(sensors.playing.active, false, 'missing twice: the app went away');
+  assert.equal(sensors.idle.active, true);
+  assert.equal(reads, before + 2);
+  await clock.advance(5 * 60_000);
+  const settled = reads;
+  await clock.advance(30 * 60_000);
+  assert.equal(reads, settled, 'no checks while nothing plays');
+  await controller.stop();
+});
+
+test('a play whose stop was missed while its session was being looked up ends at the next read', async () => {
+  let listed = [];
+  const { clock, stream, controller, sensors } = setup({ playing: () => listed, sessionFor: () => undefined });
+  await controller.start();
+  stream.connect();
+  await settle();
+  stream.emit('playing', notify('playing', 10_000));
+  await settle();
+  // The stop is never heard: the connection drops, and Plex no longer lists the session.
+  stream.disconnect();
+  stream.connect();
+  await settle();
+  await clock.advance(10_000);
+  assert.equal(sensors.playing.active, false, 'no playback that never ends');
+  assert.equal(sensors.idle.active, true);
+  listed = [notify('playing', 20_000)];
+  stream.emit('playing', notify('playing', 20_000));
+  for (let i = 0; i < 4; i++) {
+    await settle();
+    await clock.advance(1_000);
+  }
+  assert.equal(sensors.playing.active, true, 'a real play still starts, from a placeholder if need be');
+  await controller.stop();
 });

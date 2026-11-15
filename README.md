@@ -14,7 +14,7 @@ Most Plex plugins give Apple Home a single "playing" sensor. Intermission adds:
 
 - **Credits timing.** Lights come up when Plex's credits markers say the credits start, never before, re-timed when you skip.
 - **A sensor for each moment.** Playing, paused, credits and nothing playing, so each gets its own scene.
-- **Instant, without polling.** Plex pushes every change, and it works without Plex Pass too.
+- **Instant.** Plex pushes every change, so nothing waits for a poll, and it works without Plex Pass too.
 - **Sign in with Plex.** Devices and libraries come from a list; no tokens or IDs to copy.
 - **Choose the device, not the app.** Pick the Apple TV in the room and every Plex app on it counts, including apps
   added or reinstalled later. Leave out an app on it if you like.
@@ -101,6 +101,8 @@ Intermission talks only to plex.tv and your Plex servers, with no analytics. See
 - **A device's playback is ignored:** a device counts while it plays on your home network. Diagnostics, Network check
   says whether Plex reports real addresses and marks your players local. Apps report the device's model name ("Apple
   TV"), so two Apple TVs share one; Intermission notices and setup offers **This one** to keep only the one in the room.
+- **The Plex server got a new address:** Intermission finds it again through plex.tv and says so in the log. Press
+  **Refresh from Plex** in the plugin's settings to save the new address.
 - **Sensors not in the Home app:** with the child bridge, add Intermission in the Home app with the code on the Sensors
   tab after restarting Homebridge.
 
